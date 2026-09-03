@@ -5,9 +5,7 @@ build-backend	= "setuptools.build_meta"
 [project]
 name	= "ripple-edit-comfyui"
 version	= "0.0.1"
-description	= 'A frontend-only ComfyUI extension that adds a video-editor-style "ripple
-edit" tool to the node graph: drag from a point and push everything to one side out of the way, while keeping relative spacing intact. Front-end only, no custom nodes are added.'
-behavior."
+description	= 'Ripple Edit makes space within your workflow by moving nodes to the side while keeping their relative position intact. Organize your workflow layout with ripple move and align compositions of nodes. Frontend-only ComfyUI custom extension."
 authors	= [{name = "Gerold Meisinger"}]
 readme	= "README.md"
 license	= { text="GNU General Public License v3" }

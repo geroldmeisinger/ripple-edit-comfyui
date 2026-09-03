@@ -20,6 +20,29 @@ export function canvasLocalToWorld(cx, cy) {
     return { x: p[0], y: p[1] };
 }
 
+/**
+ * Viewport (`clientX`/`clientY`) -> canvas-local CSS-pixel coordinates.
+ * Needed because our pointer listeners are attached at the window level
+ * (so they still fire when the cursor is over a Vue-rendered node overlay
+ * rather than the LiteGraph <canvas> element itself) - `event.offsetX/Y`
+ * would be relative to whatever element the event actually targeted, which
+ * is no longer reliably the graph canvas.
+ */
+export function clientToCanvasLocal(clientX, clientY) {
+    const gcEl = getGraphCanvasEl();
+    if (!gcEl) return { x: clientX, y: clientY };
+    const rect = gcEl.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
+/** Is the given viewport point within the graph canvas's own bounding box? */
+export function isPointInGraphCanvas(clientX, clientY) {
+    const gcEl = getGraphCanvasEl();
+    if (!gcEl) return false;
+    const r = gcEl.getBoundingClientRect();
+    return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+}
+
 export function getScale() {
     return (app.canvas && app.canvas.ds && app.canvas.ds.scale) || 1;
 }

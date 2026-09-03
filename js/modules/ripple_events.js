@@ -1,12 +1,21 @@
 /**
  * Drag lifecycle (start/end/cancel/wheel) and all DOM listener wiring.
+ *
+ * Listeners are attached at the `window` level (capture phase) rather than
+ * scoped to the LiteGraph <canvas> element. Under Nodes 2.0, nodes render
+ * as separate DOM elements overlaid on the canvas, so a right-click landing
+ * on a node would never reach a canvas-scoped listener at all - it's a
+ * sibling element, not a descendant. Window-level capture fires regardless
+ * of which specific element is under the cursor; `isPointInGraphCanvas`
+ * keeps it scoped to the graph area so it doesn't fire over the sidebar/
+ * topbar/etc, the same way element-scoping used to.
  */
 
 import { app } from "../../../scripts/app.js";
 import { settings } from "./ripple_settings.js";
-import { getGraphCanvasEl, canvasLocalToWorld } from "./ripple_coords.js";
+import { getGraphCanvasEl, isPointInGraphCanvas, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
 import { ensureOverlays, resizeOverlays, clearOverlays } from "./ripple_overlay.js";
-import { R, resetDragState, snapshotCurrentPositions } from "./ripple_state.js";
+import { R, resetDragState, snapshotCurrentPositions, getRememberedExtentPx, setRememberedExtentPx } from "./ripple_state.js";
 import { tick, restoreTrueOriginalPositions } from "./ripple_engine.js";
 import { redrawOverlays } from "./ripple_draw.js";
 
@@ -18,7 +27,7 @@ function startDrag(e) {
     ensureOverlays();
     resizeOverlays();
 
-    const localPoint = { x: e.offsetX, y: e.offsetY };
+    const localPoint = clientToCanvasLocal(e.clientX, e.clientY);
     const world = canvasLocalToWorld(localPoint.x, localPoint.y);
 
     resetDragState();
@@ -52,18 +61,38 @@ function cancelDrag() {
     clearOverlays();
 }
 
+/**
+ * The remembered line length is absolute pixels, persisted across drags and
+ * across mode/orientation changes - only a wheel event ever changes it.
+ * Each notch adjusts it by `scrollStepPercent` of the *current* viewport
+ * dimension (rounded to the nearest step), with no upper limit. Shrinking
+ * below one step turns it back into an infinite line.
+ */
 function handleWheel(e) {
     if (!R.isDragging || !R.displayAxis) return;
     e.preventDefault();
     e.stopPropagation();
 
+    const gcEl = getGraphCanvasEl();
+    if (!gcEl) return;
+    const rect = gcEl.getBoundingClientRect();
+    const viewportExtent = R.displayAxis === "x" ? rect.height : rect.width;
     const step = Math.max(1, settings.scrollStepPercent);
-    if (!R.hasScrolled) {
-        R.hasScrolled = true;
-        R.extentPercent = e.deltaY > 0 ? 80 : 20;
+    const current = getRememberedExtentPx();
+
+    if (current === null) {
+        const basePercent = e.deltaY > 0 ? 80 : 20;
+        const rounded = Math.round(basePercent / step) * step;
+        setRememberedExtentPx((viewportExtent * rounded) / 100);
     } else {
-        const base = R.extentPercent === null ? 100 : R.extentPercent;
-        R.extentPercent = Math.min(100, Math.max(3, base + (e.deltaY > 0 ? -step : step)));
+        const currentPercent = (current / viewportExtent) * 100;
+        const nextPercent = currentPercent + (e.deltaY > 0 ? -step : step);
+        if (nextPercent < step) {
+            setRememberedExtentPx(null); // back to infinite
+        } else {
+            const rounded = Math.round(nextPercent / step) * step;
+            setRememberedExtentPx((viewportExtent * rounded) / 100);
+        }
     }
     tick(e);
 }
@@ -72,26 +101,26 @@ function handleWheel(e) {
 // Event wiring
 // ---------------------------------------------------------------------------
 
-export function attachCanvasListeners() {
-    const gcEl = getGraphCanvasEl();
-    if (!gcEl) return false;
-    if (gcEl.__rippleEditAttached) return true;
-    gcEl.__rippleEditAttached = true;
+let attached = false;
 
-    gcEl.addEventListener(
+export function attachGlobalPointerListeners() {
+    if (attached) return true;
+    attached = true;
+
+    window.addEventListener(
         "pointerdown",
         (e) => {
             if (!settings.enabled) return;
-            if (e.button === 2 && e.ctrlKey) {
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                startDrag(e);
-            }
+            if (e.button !== 2 || !e.ctrlKey) return;
+            if (!isPointInGraphCanvas(e.clientX, e.clientY)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            startDrag(e);
         },
         { capture: true }
     );
 
-    gcEl.addEventListener(
+    window.addEventListener(
         "pointermove",
         (e) => {
             if (!R.isDragging) return;
@@ -106,7 +135,7 @@ export function attachCanvasListeners() {
         { capture: true }
     );
 
-    gcEl.addEventListener(
+    window.addEventListener(
         "pointerup",
         (e) => {
             if (!R.isDragging) return;
@@ -118,7 +147,7 @@ export function attachCanvasListeners() {
         { capture: true }
     );
 
-    gcEl.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+    window.addEventListener("wheel", handleWheel, { capture: true, passive: false });
 
     return true;
 }
@@ -171,9 +200,10 @@ export function attachGlobalSafetyListeners() {
 
 export function attachResizeObserver() {
     const gcEl = getGraphCanvasEl();
-    if (!gcEl || typeof ResizeObserver === "undefined") return;
+    if (!gcEl || typeof ResizeObserver === "undefined") return false;
     const ro = new ResizeObserver(() => {
         if (R.isDragging) redrawOverlays();
     });
     ro.observe(gcEl);
+    return true;
 }
