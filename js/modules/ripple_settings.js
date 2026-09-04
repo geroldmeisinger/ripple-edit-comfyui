@@ -38,7 +38,8 @@ export function registerSettings() {
     };
 
     add("RippleEdit.Enabled", "Ripple Edit: Enable Ctrl+Right-drag tool", "boolean", DEFAULTS.enabled, "enabled");
-    add("RippleEdit.SafeZoneRadius", "Ripple Edit: Safe-zone radius around origin before anything moves (graph units)", "number", DEFAULTS.safeZoneRadius, "safeZoneRadius");
+    add("RippleEdit.SafeZoneRadius", "Ripple Edit: Safe zone - radius around origin before anything moves (graph units)", "number", DEFAULTS.safeZoneRadius, "safeZoneRadius");
+    add("RippleEdit.SafeZoneLockOrientation", "Ripple Edit: Safe zone - lock orientation once engaged (no swapping mid-drag)", "boolean", DEFAULTS.lockOrientationOutsideSafeZone, "lockOrientationOutsideSafeZone");
     add("RippleEdit.MaxDistance", "Ripple Edit: Maximum node distance from origin affected, -1 = infinite (graph units)", "number", DEFAULTS.maxDistance, "maxDistance");
     add("RippleEdit.LineWidth", "Ripple Edit: Ripple line thickness (px)", "number", DEFAULTS.lineWidth, "lineWidth");
     add("RippleEdit.ScrollStepPercent", "Ripple Edit: Scroll-wheel resize step (% of current viewport dimension)", "number", DEFAULTS.scrollStepPercent, "scrollStepPercent");
@@ -50,15 +51,14 @@ export function registerSettings() {
         "nodeInclusionMode",
         { options: NODE_INCLUSION_OPTIONS }
     );
-    add("RippleEdit.LockOrientationOutsideSafeZone", "Ripple Edit: Lock orientation once engaged (no swapping mid-drag)", "boolean", DEFAULTS.lockOrientationOutsideSafeZone, "lockOrientationOutsideSafeZone");
     add("RippleEdit.HideVisuals", "Ripple Edit: Hide all ripple visuals (line, rectangle, icon, labels)", "boolean", DEFAULTS.hideVisuals, "hideVisuals");
 
-    add("RippleEdit.PusherLineColor", "Ripple Edit: Pusher (insert space) line color", "text", DEFAULTS.pusherLineColor, "pusherLineColor");
-    add("RippleEdit.PusherFillColor", "Ripple Edit: Pusher (insert space) box color", "text", DEFAULTS.pusherFillColor, "pusherFillColor");
-    add("RippleEdit.PullerLineColor", "Ripple Edit: Puller (remove space) line color", "text", DEFAULTS.pullerLineColor, "pullerLineColor");
-    add("RippleEdit.PullerFillColor", "Ripple Edit: Puller (remove space) box color", "text", DEFAULTS.pullerFillColor, "pullerFillColor");
-    add("RippleEdit.AlignerLineColor", "Ripple Edit: Aligner (physical sweep) line color", "text", DEFAULTS.alignerLineColor, "alignerLineColor");
-    add("RippleEdit.AlignerFillColor", "Ripple Edit: Aligner (physical sweep) box color", "text", DEFAULTS.alignerFillColor, "alignerFillColor");
+    add("RippleEdit.ColorPusherLine", "Ripple Edit: Pusher (insert space) line color", "text", DEFAULTS.pusherLineColor, "pusherLineColor");
+    add("RippleEdit.ColorPusherFill", "Ripple Edit: Pusher (insert space) box color", "text", DEFAULTS.pusherFillColor, "pusherFillColor");
+    add("RippleEdit.ColorPullerLine", "Ripple Edit: Puller (remove space) line color", "text", DEFAULTS.pullerLineColor, "pullerLineColor");
+    add("RippleEdit.ColorPullerFill", "Ripple Edit: Puller (remove space) box color", "text", DEFAULTS.pullerFillColor, "pullerFillColor");
+    add("RippleEdit.ColorAlignerLine", "Ripple Edit: Aligner (physical sweep) line color", "text", DEFAULTS.alignerLineColor, "alignerLineColor");
+    add("RippleEdit.ColorAlignerFill", "Ripple Edit: Aligner (physical sweep) box color", "text", DEFAULTS.alignerFillColor, "alignerFillColor");
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +139,12 @@ export function warnAboutVueNodesOnce() {
         "[RippleEdit] Nodes 2.0 (Comfy.VueNodes.Enabled) is on. ComfyUI's Vue node " +
         "renderer stores positions in a separate layout store that this extension " +
         "cannot currently write to directly, so moved nodes may not visually update " +
-        "in real time. Node positions are still computed correctly (useful if you " +
-        "later disable Nodes 2.0). If this is disruptive, switch back to classic " +
-        "rendering via the ComfyUI logo menu > Nodes 2.0 toggle."
+        "in real time (this is a documented limitation of the current Nodes 2.0 " +
+        "implementation in general - e.g. the comfyui-housekeeper extension hits the " +
+        "same wall: 'Housekeeper writes node positions straight into litegraph's " +
+        "arrays, which that store does not see, so the buttons appear to do " +
+        "nothing.'). Node positions are still computed correctly here (useful if you " +
+        "later disable Nodes 2.0, or if something else reads node.pos). If this is " +
+        "disruptive, switch back to classic rendering via Settings > Comfy > Nodes 2.0."
     );
 }

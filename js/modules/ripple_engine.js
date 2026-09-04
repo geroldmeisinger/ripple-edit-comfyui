@@ -9,7 +9,7 @@ import { RIPPLE_MODE } from "./ripple_constants.js";
 import { settings, snapValue, warnAboutVueNodesOnce } from "./ripple_settings.js";
 import { getGraphCanvasEl, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
 import { R, currentModeFromEvent, getRememberedExtentPx } from "./ripple_state.js";
-import { computePushShift, computePullShift, computeAlignerShift } from "./ripple_math.js";
+import { computePushShift, computePullShift, computeAlignerShift, edgeIncluded } from "./ripple_math.js";
 import { redrawOverlays } from "./ripple_draw.js";
 
 // ---------------------------------------------------------------------------
@@ -84,14 +84,22 @@ export function applyRipple() {
 
         const perpC = perpIdx === 0 ? orig.x : orig.y;
         const perpH = node.size ? node.size[perpIdx] : 0;
-        const inPerp = !perpRange || (perpC + perpH > perpRange[0] && perpC < perpRange[1]);
+        const inPerp = !perpRange || edgeIncluded((x) => x >= perpRange[0] && x <= perpRange[1], perpC, perpC + perpH, inclusion);
+
+        if (!inPerp && (mode === RIPPLE_MODE.PULLER || mode === RIPPLE_MODE.ALIGNER) && R.captured.has(node)) {
+            // "Falls off the side" of a finite line: fully release it rather
+            // than just skipping this frame, so it doesn't silently re-stick
+            // the instant the line's length/position happens to cover it
+            // again later in this run.
+            R.captured.delete(node);
+        }
 
         let shiftedCoord = c;
         if (inPerp) {
             const distFromTrueOrigin = Math.abs(c - originCoord);
             if (maxDist === -1 || distFromTrueOrigin <= maxDist) {
                 if (mode === RIPPLE_MODE.ALIGNER) {
-                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
+                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion);
                 } else if (mode === RIPPLE_MODE.PUSHER) {
                     shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
                 } else if (mode === RIPPLE_MODE.PULLER) {
@@ -172,6 +180,12 @@ export function tick(e) {
         R.currentAxis = null;
         R.currentMode = null;
         R.captured = null;
+        // Keep the distance readout consistent with the visual (which
+        // always tracks the raw, near-origin cursor while disengaged)
+        // instead of showing a stale number from the last time it was
+        // engaged.
+        R.displayDelta = 0;
+        R.displayDir = 0;
     } else {
         const changed = R.currentAxis !== liveAxis || R.currentMode !== mode;
         if (changed) {

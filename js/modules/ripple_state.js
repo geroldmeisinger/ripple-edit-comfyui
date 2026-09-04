@@ -84,9 +84,17 @@ export function snapshotCurrentPositions() {
 // ---------------------------------------------------------------------------
 // Remembered ripple line length - persists across drags and across
 // mode/orientation changes within a drag; only a wheel event changes it.
+// `infiniteSource` tracks which side "infinite" was approached from
+// ("up" = grew past the upper threshold, "down" = shrank past the lower
+// one), so that scrolling further the same way is a no-op instead of
+// jumping, while scrolling the other way re-enters finite territory near
+// the boundary it's inside of. Every new drag resets it to "up" if the
+// line is currently infinite (per spec - a fresh drag always starts
+// "as if" approached from the wheel-up side).
 // ---------------------------------------------------------------------------
 
 let rememberedExtentPxValue = null; // null = infinite
+let infiniteSourceValue = "up"; // "up" | "down" - only meaningful while extent is null
 
 export function getRememberedExtentPx() {
     return rememberedExtentPxValue;
@@ -94,4 +102,12 @@ export function getRememberedExtentPx() {
 
 export function setRememberedExtentPx(v) {
     rememberedExtentPxValue = v;
+}
+
+export function getInfiniteSource() {
+    return infiniteSourceValue;
+}
+
+export function setInfiniteSource(v) {
+    infiniteSourceValue = v;
 }

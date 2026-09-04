@@ -15,7 +15,7 @@ import { app } from "../../../scripts/app.js";
 import { settings } from "./ripple_settings.js";
 import { getGraphCanvasEl, isPointInGraphCanvas, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
 import { ensureOverlays, resizeOverlays, clearOverlays } from "./ripple_overlay.js";
-import { R, resetDragState, snapshotCurrentPositions, getRememberedExtentPx, setRememberedExtentPx } from "./ripple_state.js";
+import { R, resetDragState, snapshotCurrentPositions, getRememberedExtentPx, setRememberedExtentPx, getInfiniteSource, setInfiniteSource } from "./ripple_state.js";
 import { tick, restoreTrueOriginalPositions } from "./ripple_engine.js";
 import { redrawOverlays } from "./ripple_draw.js";
 
@@ -36,6 +36,10 @@ function startDrag(e) {
     R.lastWorld = world;
     R.lastLocal = localPoint;
     R.trueOriginalPositions = snapshotCurrentPositions();
+
+    // A fresh drag always starts "as if" the (possibly still-infinite) line
+    // was approached from the wheel-up side.
+    if (getRememberedExtentPx() === null) setInfiniteSource("up");
 
     tick(e);
 }
@@ -64,9 +68,13 @@ function cancelDrag() {
 /**
  * The remembered line length is absolute pixels, persisted across drags and
  * across mode/orientation changes - only a wheel event ever changes it.
- * Each notch adjusts it by `scrollStepPercent` of the *current* viewport
- * dimension (rounded to the nearest step), with no upper limit. Shrinking
- * below one step turns it back into an infinite line.
+ *
+ * There are two distinct "infinite" states depending on which direction you
+ * arrived from: "up" (grew past 100% + 5 steps) and "down" (shrank below one
+ * step). Scrolling *further the same way* while infinite is a no-op - it
+ * doesn't jump anywhere. Scrolling the *other* way re-enters finite
+ * territory landing one step inside whichever boundary you were at, rather
+ * than always resetting to a fixed 80%/20%.
  */
 function handleWheel(e) {
     if (!R.isDragging || !R.displayAxis) return;
@@ -78,20 +86,32 @@ function handleWheel(e) {
     const rect = gcEl.getBoundingClientRect();
     const viewportExtent = R.displayAxis === "x" ? rect.height : rect.width;
     const step = Math.max(1, settings.scrollStepPercent);
+    const upperThreshold = 100 + 5 * step;
+    const shrinking = e.deltaY > 0; // "scroll down" = shrink; "scroll up" = grow
+
     const current = getRememberedExtentPx();
+    const toPx = (percent) => (viewportExtent * percent) / 100;
 
     if (current === null) {
-        const basePercent = e.deltaY > 0 ? 80 : 20;
-        const rounded = Math.round(basePercent / step) * step;
-        setRememberedExtentPx((viewportExtent * rounded) / 100);
+        const source = getInfiniteSource();
+        if (source === "up") {
+            if (!shrinking) return; // further growth while already infinite-from-up: no-op
+            setRememberedExtentPx(toPx(upperThreshold - step));
+        } else {
+            if (shrinking) return; // further shrinkage while already infinite-from-down: no-op
+            setRememberedExtentPx(toPx(step * 2));
+        }
     } else {
         const currentPercent = (current / viewportExtent) * 100;
-        const nextPercent = currentPercent + (e.deltaY > 0 ? -step : step);
+        const nextPercent = currentPercent + (shrinking ? -step : step);
         if (nextPercent < step) {
-            setRememberedExtentPx(null); // back to infinite
+            setRememberedExtentPx(null);
+            setInfiniteSource("down");
+        } else if (nextPercent > upperThreshold) {
+            setRememberedExtentPx(null);
+            setInfiniteSource("up");
         } else {
-            const rounded = Math.round(nextPercent / step) * step;
-            setRememberedExtentPx((viewportExtent * rounded) / 100);
+            setRememberedExtentPx(toPx(Math.round(nextPercent / step) * step));
         }
     }
     tick(e);

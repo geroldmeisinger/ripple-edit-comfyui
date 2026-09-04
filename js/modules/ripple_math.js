@@ -55,21 +55,25 @@ export function computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoor
 }
 
 /**
- * ALIGNER (physical sweep, testing): once the sweeping line touches a node,
- * that node sticks to it - flush against the line's current position - for
- * the rest of this (axis, mode) run, so pulling the line back also pulls
- * the node back with it. It can only ever be pulled back as far as its own
- * original position, though: once the line retreats past where the node
- * started, the node just sits there again (released) rather than being
- * dragged along past its own start.
+ * ALIGNER (physical sweep, testing): once the sweeping line touches a node
+ * (per the "node inclusion mode" setting, same as pusher/puller), that node
+ * sticks to it - flush against the line's current position - for the rest
+ * of this (axis, mode) run, so pulling the line back also pulls the node
+ * back with it. It can only ever be pulled back as far as its own original
+ * position, though: once the line retreats past where the node started,
+ * the node just sits there again (released) rather than being dragged
+ * along past its own start. `R.captured` membership is also revoked
+ * externally (see ripple_engine.js applyRipple) when a node falls outside
+ * the line's finite length filter, so a node that's fully carried "off the
+ * side" of the line is released and returns to its original position.
  */
-export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir) {
+export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion) {
     if (dir === 0) return 0;
 
     const sweptLo = Math.min(originCoord, cursorCoord);
     const sweptHi = Math.max(originCoord, cursorCoord);
-    const overlapsNow = nodeMax > sweptLo && nodeMin < sweptHi;
-    const eligible = R.captured.has(node) || overlapsNow;
+    const touchingNow = edgeIncluded((x) => x >= sweptLo && x <= sweptHi, nodeMin, nodeMax, inclusion);
+    const eligible = R.captured.has(node) || touchingNow;
     if (!eligible) return 0;
     R.captured.add(node);
 
