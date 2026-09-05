@@ -17,7 +17,9 @@ Ripple Edit makes space in your workflow by moving a group of nodes to the side 
 * `Mousewheel`: changes line length
 * `esc`: cancel and restore original positions (alternatively you can move into the safe-zone)
 
-If you like this extension, also check out my other project: [ComfyUI OutputLists Combiner](https://github.com/geroldmeisinger/ComfyUI-outputlists-combiner) - supercharge multi-asset generation!
+If you like this extension, also check out my..
+
+Other project: **[ComfyUI OutputLists Combiner](https://github.com/geroldmeisinger/ComfyUI-outputlists-combiner) - supercharge multi-asset generation!**
 
 # Installation
 
@@ -39,3 +41,15 @@ comfy-cli node install ripple-edit-comfyui
 cd custom_nodes # in ComfyUI/
 git clone https://github.com/geroldmeisinger/ripple-edit-comfyui
 ```
+
+# Recommended third-party nodes
+
+Here are some other node suites I recommend for layouting:
+
+[SparknightLLC - CrosshairGuidelines](https://github.com/SparknightLLC/ComfyUI-CrosshairGuidelines)
+
+![SparknightLLC - CrosshairGuidelines](/media/thirdparty_crosshairguidelines.png)
+
+[joanna910225 - HouseKeeper](https://github.com/joanna910225/comfyui-housekeeper)
+
+![joanna910225 - HouseKeeper](/media/thirdparty_housekeeper.png)
