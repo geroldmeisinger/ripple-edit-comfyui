@@ -18,7 +18,10 @@ export const R = {
     // this - there is no more "local segment origin" concept: switching
     // mode or orientation now resets moved nodes back to these positions
     // (see ripple_engine.js) rather than continuing seamlessly from them.
-    startWorld: null,            // {x,y}
+    startWorld: null,            // {x,y} graph-space
+    startLocal: null,            // {x,y} canvas-local CSS px - the safe zone is measured in
+                                  // *display* pixels (see ripple_engine.js), independent of
+                                  // zoom, so this is tracked separately from startWorld.
     trueOriginalPositions: null, // Map(node -> {x,y}) snapshot at drag start
 
     // Live cursor tracking.
@@ -47,6 +50,7 @@ export const R = {
 export function resetDragState() {
     R.isDragging = false;
     R.startWorld = null;
+    R.startLocal = null;
     R.trueOriginalPositions = null;
     R.lastWorld = null;
     R.lastLocal = null;

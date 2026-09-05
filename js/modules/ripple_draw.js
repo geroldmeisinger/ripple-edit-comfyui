@@ -7,10 +7,17 @@
  * Visual positioning (the line, rectangle, and icon) always tracks the raw
  * cursor position - never the safe-zone-discounted "effective" position
  * used for actually computing node shifts. Using the discounted position
- * for visuals made the line/icon visibly lag behind the cursor by
- * `safeZoneRadius` pixels and feel "stuck". The *numbers* shown (the
- * distance label) still use the discounted amount, since that's the actual
- * effect size - only the drawing position is raw.
+ * for visuals made the line/icon visibly lag behind the cursor and feel
+ * "stuck" in the safe zone. The *numbers* shown (the distance label) still
+ * use the discounted amount, since that's the actual effect size - only the
+ * drawing position is raw.
+ *
+ * The safe-zone radius is configured in *display* pixels (see
+ * ripple_engine.js for why) - the origin-marker circle is drawn at that
+ * exact radius, unscaled by zoom, while the rectangle/distance-indicator's
+ * "outer edge of the safe zone" start point is computed in graph units
+ * (radius / current zoom scale), since that has to combine with node
+ * positions, which live in graph space.
  */
 
 import { COLORS, RIPPLE_MODE } from "./ripple_constants.js";
@@ -26,15 +33,14 @@ function paletteFor(mode) {
 }
 
 function drawOriginMarker(ctx, originLocal, mode) {
-    const radiusWorld = Math.max(0, settings.safeZoneRadius);
-    const radiusPx = radiusWorld * getScale();
+    const radiusPx = Math.max(0, settings.safeZoneRadius); // display px, unscaled - see module header
     const color = paletteFor(mode).line;
     ctx.save();
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 1.5;
 
-    if (radiusWorld <= 0) {
+    if (radiusPx <= 0) {
         const s = 7;
         ctx.beginPath();
         ctx.moveTo(originLocal.x - s, originLocal.y);
@@ -57,13 +63,14 @@ function drawOriginMarker(ctx, originLocal, mode) {
  * Draws the ripple line as a filled, edge-aligned rectangle: the forward
  * edge (in the direction of travel) sits exactly at `cursorLocal`, and the
  * full thickness extends backward from there - nothing is ever drawn past
- * the cursor. Also draws the fill rectangle between the origin and the line
- * (skipped for the aligner, which has no "space" concept). An infinite line
- * is drawn at double the viewport dimension, centered on the cursor, so it
- * always reaches both edges regardless of where the cursor currently is.
- * Returns segment info used for the overflow label.
+ * the cursor. Also draws the fill rectangle between the outer edge of the
+ * safe zone and the line (skipped for the aligner, which has no "space"
+ * concept). An infinite line is drawn at double the viewport dimension,
+ * centered on the cursor, so it always reaches both edges regardless of
+ * where the cursor currently is. Returns segment info used for the
+ * overflow label.
  */
-function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, originLocal, cursorLocal) {
+function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeLocal, cursorLocal) {
     const viewportExtent = axisIsX ? rect.height : rect.width;
     const perpCenter = axisIsX ? cursorLocal.y : cursorLocal.x;
 
@@ -75,8 +82,8 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, originLocal, 
     const clippedEnd = Math.min(viewportExtent, segEnd);
 
     if (mode !== RIPPLE_MODE.ALIGNER) {
-        const along0 = Math.min(originLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
-        const along1 = Math.max(originLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
+        const along0 = Math.min(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
+        const along1 = Math.max(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
         ctx.save();
         ctx.fillStyle = palette.fill;
         if (axisIsX) ctx.fillRect(along0, clippedStart, along1 - along0, clippedEnd - clippedStart);
@@ -107,10 +114,12 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, originLocal, 
 }
 
 /**
- * The mode icon: a triangle (tip at the line) for pusher/puller, or three
- * short bars sharing a common base edge (an "align to base" glyph) for the
- * aligner. Nothing is drawn past `tipLocal` - the tip/base edge sits
- * exactly there, and the shape extends backward from it.
+ * The mode icon: a triangle (tip at the line) for pusher/puller - reversed
+ * for the pusher, so it reads as a wedge prying space open rather than an
+ * arrow, vs. the puller's arrow pointing the direction it's pulling - or a
+ * 3-bar "align to base" glyph for the aligner. Nothing is drawn past
+ * `tipLocal` - the tip/base edge sits exactly there, and the shape extends
+ * backward from it.
  */
 function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
     const d = dir === 0 ? 1 : dir;
@@ -134,17 +143,18 @@ function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
             }
         }
     } else {
+        const point = mode === RIPPLE_MODE.PUSHER ? -d : d;
         const len = 14;
         const halfWidth = 6;
         ctx.beginPath();
         if (axisIsX) {
             ctx.moveTo(tipLocal.x, tipLocal.y);
-            ctx.lineTo(tipLocal.x - d * len, tipLocal.y - halfWidth);
-            ctx.lineTo(tipLocal.x - d * len, tipLocal.y + halfWidth);
+            ctx.lineTo(tipLocal.x - point * len, tipLocal.y - halfWidth);
+            ctx.lineTo(tipLocal.x - point * len, tipLocal.y + halfWidth);
         } else {
             ctx.moveTo(tipLocal.x, tipLocal.y);
-            ctx.lineTo(tipLocal.x - halfWidth, tipLocal.y - d * len);
-            ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y - d * len);
+            ctx.lineTo(tipLocal.x - halfWidth, tipLocal.y - point * len);
+            ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y - point * len);
         }
         ctx.closePath();
         ctx.fill();
@@ -157,17 +167,17 @@ function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
  * cursor, runs along the drag axis at the cursor's own perpendicular
  * position, and then - since that's generally not the safe-zone circle's
  * own row/column - a short *orthogonal* segment closes the gap to the
- * actual tip of the safe-zone circle. Drawn as one dashed polyline:
- * circle-edge -> elbow point -> cursor.
+ * actual outer edge of the safe zone. Drawn as one dashed polyline:
+ * safe-zone edge -> elbow point -> cursor.
  */
-function drawDistanceIndicator(ctx, axisIsX, circleEdgeLocal, cursorLocal) {
-    const elbow = axisIsX ? { x: circleEdgeLocal.x, y: cursorLocal.y } : { x: cursorLocal.x, y: circleEdgeLocal.y };
+function drawDistanceIndicator(ctx, axisIsX, safeZoneEdgeLocal, cursorLocal) {
+    const elbow = axisIsX ? { x: safeZoneEdgeLocal.x, y: cursorLocal.y } : { x: cursorLocal.x, y: safeZoneEdgeLocal.y };
     ctx.save();
     ctx.strokeStyle = COLORS.helperLine;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(circleEdgeLocal.x, circleEdgeLocal.y);
+    ctx.moveTo(safeZoneEdgeLocal.x, safeZoneEdgeLocal.y);
     ctx.lineTo(elbow.x, elbow.y);
     ctx.lineTo(cursorLocal.x, cursorLocal.y);
     ctx.stroke();
@@ -218,13 +228,23 @@ export function redrawOverlays() {
     // Before ever engaging (leaving the safe zone) at least once this drag,
     // we don't know the eventual orientation/effect yet, so only the icon
     // is shown - no line, no rectangle, no distance info. Once engaged at
-    // least once, returning to the safe zone shows the line again, greyed.
+    // least once, returning to the safe zone shows the line again, greyed -
+    // and its direction keeps live-updating with the cursor even then.
     const neverEngagedYet = inSafeZone && R.engagedAxis === null;
 
     drawModeIcon(overlayCtx, mode, axisIsX, dir, cursorLocal, drawColor);
     if (neverEngagedYet) return;
 
-    const segInfo = drawRippleVisuals(overlayCtx, rect, drawPalette, mode, axisIsX, dir, originLocal, cursorLocal);
+    // The outer edge of the safe-zone circle, in the current direction of
+    // travel - both the rectangle and the distance indicator start here,
+    // not at the origin's exact center.
+    const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
+    const safeZoneEdgeWorld = axisIsX
+        ? { x: R.startWorld.x + safeRadiusGraph * (dir || 1), y: R.startWorld.y }
+        : { x: R.startWorld.x, y: R.startWorld.y + safeRadiusGraph * (dir || 1) };
+    const safeZoneEdgeLocal = worldToCanvasLocal(safeZoneEdgeWorld.x, safeZoneEdgeWorld.y);
+
+    const segInfo = drawRippleVisuals(overlayCtx, rect, drawPalette, mode, axisIsX, dir, safeZoneEdgeLocal, cursorLocal);
 
     const toLabelSpace = (localX, localY) => ({ x: rect.left + localX, y: rect.top + localY });
 
@@ -232,7 +252,7 @@ export function redrawOverlays() {
     // aligner. Only meaningful once you've scrolled to a finite length;
     // an infinite line shows the infinity symbol instead of a huge number.
     if (segInfo.overflowStart > 0 || segInfo.overflowEnd > 0) {
-        const overflowText = (px) => (segInfo.isInfinite ? "\u221E" : `+${Math.round(px)}px`);
+        const overflowText = (px) => (segInfo.isInfinite ? "\u221E" : formatDistance("+", Math.round(px), "px"));
         if (axisIsX) {
             if (segInfo.overflowStart > 0) {
                 const p = toLabelSpace(cursorLocal.x + 8, 14);
@@ -259,12 +279,7 @@ export function redrawOverlays() {
     // for it, so no distance indicator/label is drawn for that mode.
     if (mode === RIPPLE_MODE.ALIGNER) return;
 
-    const circleEdgeWorld = axisIsX
-        ? { x: R.startWorld.x + Math.max(0, settings.safeZoneRadius) * (dir || 1), y: R.startWorld.y }
-        : { x: R.startWorld.x, y: R.startWorld.y + Math.max(0, settings.safeZoneRadius) * (dir || 1) };
-    const circleEdgeLocal = worldToCanvasLocal(circleEdgeWorld.x, circleEdgeWorld.y);
-
-    drawDistanceIndicator(overlayCtx, axisIsX, circleEdgeLocal, cursorLocal);
+    drawDistanceIndicator(overlayCtx, axisIsX, safeZoneEdgeLocal, cursorLocal);
 
     const distWorld = Math.abs(R.displayDelta);
     const sign = mode === RIPPLE_MODE.PULLER ? "-" : "+";

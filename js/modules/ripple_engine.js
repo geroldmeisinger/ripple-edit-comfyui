@@ -2,12 +2,39 @@
  * Orchestration: the perpendicular line-length filter, applying the ripple
  * to every node, and `tick()` - the per-frame function that handles the
  * safe zone, resets on any (axis, mode) change, and triggers a redraw.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THE SAFE ZONE IS FOR
+ * ---------------------------------------------------------------------------
+ * A real mouse gesture rarely starts out moving in a perfectly straight
+ * line - the first few pixels of a drag often "tremble" a little (e.g. the
+ * overall motion is clearly rightward, but there's a stray pixel or two of
+ * vertical drift right at the start). If orientation were picked from the
+ * very first hint of movement, that tremble could just as easily pick the
+ * wrong axis. The safe zone is a small dead zone around the origin, in
+ * *screen* pixels (see below), where nothing happens yet and orientation
+ * isn't committed to - it exists purely to give a real gesture enough room
+ * to declare its actual direction before the tool acts on it. Once the
+ * cursor clears it, the direction it cleared it in is trusted.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY SCREEN PIXELS, NOT GRAPH UNITS
+ * ---------------------------------------------------------------------------
+ * A physical mouse tremble is a fixed number of *screen* pixels, regardless
+ * of how far zoomed in the graph is - so the safe zone is measured and
+ * compared in screen/display pixels (`R.startLocal`/`R.lastLocal`), not
+ * graph units. Everything downstream of that decision (how far a node
+ * actually shifts, the distance label, the off-screen overflow readout)
+ * still operates in graph units, since that's the space node positions
+ * live in - so the safe-zone radius is converted from display px to graph
+ * units (dividing by the current zoom scale) wherever it needs to be
+ * combined with a graph-space distance.
  */
 
 import { app } from "../../../scripts/app.js";
 import { RIPPLE_MODE } from "./ripple_constants.js";
 import { settings, snapValue, warnAboutVueNodesOnce } from "./ripple_settings.js";
-import { getGraphCanvasEl, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
+import { getGraphCanvasEl, getScale, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
 import { R, currentModeFromEvent, getRememberedExtentPx } from "./ripple_state.js";
 import { computePushShift, computePullShift, computeAlignerShift, edgeIncluded } from "./ripple_math.js";
 import { redrawOverlays } from "./ripple_draw.js";
@@ -45,21 +72,23 @@ export function applyRipple() {
     const mode = R.currentMode;
     const maxDist = settings.maxDistance;
     const inclusion = settings.nodeInclusionMode;
-    const safeRadius = Math.max(0, settings.safeZoneRadius);
+    // The safe-zone radius is configured in display pixels; convert to
+    // graph units at the current zoom to combine with graph-space deltas.
+    const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
 
     const perpRange = getPerpWorldRange(perpIdx);
 
     const rawDelta = rawCursorCoord - originCoord;
     const rawDir = Math.sign(rawDelta);
 
-    // The safe-zone discount (see below) exists purely so the pusher/puller
-    // threshold - and the on-screen distance readout - feel continuous as
-    // you cross out of the safe zone; it's about *space*, not about a
-    // physical touch. The aligner is a direct physical interaction with the
-    // line's actual position, so it deliberately uses the raw, undiscounted
-    // cursor position instead - using the discounted one would mean the
-    // aligner only "reaches" a node once the line is `safeZoneRadius` worth
-    // of extra pixels *inside* it, which doesn't correspond to anything
+    // The safe-zone discount exists purely so the pusher/puller threshold -
+    // and the on-screen distance readout - feel continuous as you cross out
+    // of the safe zone; it's about *space*, not about a physical touch. The
+    // aligner is a direct physical interaction with the line's actual
+    // position, so it deliberately uses the raw, undiscounted cursor
+    // position instead - using the discounted one would mean the aligner
+    // only "reaches" a node once the line is `safeZoneRadius` worth of
+    // extra pixels *inside* it, which doesn't correspond to anything
     // physical.
     let delta, dir, cursorCoord;
     if (mode === RIPPLE_MODE.ALIGNER) {
@@ -68,7 +97,7 @@ export function applyRipple() {
         cursorCoord = rawCursorCoord;
     } else {
         dir = rawDir;
-        delta = dir * Math.max(0, Math.abs(rawDelta) - safeRadius);
+        delta = dir * Math.max(0, Math.abs(rawDelta) - safeRadiusGraph);
         cursorCoord = originCoord + delta;
     }
 
@@ -84,22 +113,32 @@ export function applyRipple() {
 
         const perpC = perpIdx === 0 ? orig.x : orig.y;
         const perpH = node.size ? node.size[perpIdx] : 0;
-        const inPerp = !perpRange || edgeIncluded((x) => x >= perpRange[0] && x <= perpRange[1], perpC, perpC + perpH, inclusion);
+        const perpTest = (x) => x >= perpRange[0] && x <= perpRange[1];
 
-        if (!inPerp && (mode === RIPPLE_MODE.PULLER || mode === RIPPLE_MODE.ALIGNER) && R.captured.has(node)) {
-            // "Falls off the side" of a finite line: fully release it rather
-            // than just skipping this frame, so it doesn't silently re-stick
-            // the instant the line's length/position happens to cover it
-            // again later in this run.
-            R.captured.delete(node);
+        // Being "stuck" to the puller/aligner and later falling outside the
+        // line's finite length is a *release*: with the default "clear"
+        // setting (both edges must be inside to count), applying that same
+        // test to "is the node still fully within the line's reach" means
+        // the node is released the instant even a sliver of it isn't -
+        // which is what "clear" already means everywhere else, just
+        // visible here as an exit condition instead of an entry one. No
+        // separate "reversed" combinator needed - same `inclusion` setting,
+        // same test, applied to "am I still in range" instead of "did I
+        // just enter range".
+        const wasCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
+        if (wasCaptured && perpRange) {
+            const stillIn = edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
+            if (!stillIn) R.captured.delete(node);
         }
+        const stillCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
+        const inPerp = stillCaptured || !perpRange || edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
 
         let shiftedCoord = c;
         if (inPerp) {
             const distFromTrueOrigin = Math.abs(c - originCoord);
             if (maxDist === -1 || distFromTrueOrigin <= maxDist) {
                 if (mode === RIPPLE_MODE.ALIGNER) {
-                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion);
+                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
                 } else if (mode === RIPPLE_MODE.PUSHER) {
                     shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
                 } else if (mode === RIPPLE_MODE.PULLER) {
@@ -149,14 +188,16 @@ export function tick(e) {
         R.lastLocal = local;
         R.lastWorld = canvasLocalToWorld(local.x, local.y);
     }
-    if (!R.lastWorld) return;
+    if (!R.lastWorld || !R.lastLocal || !R.startLocal) return;
+
+    // Safe-zone membership is decided in screen pixels (see the module
+    // header comment for why), independent of zoom.
+    const distScreen = Math.hypot(R.lastLocal.x - R.startLocal.x, R.lastLocal.y - R.startLocal.y);
+    const safeRadiusPx = Math.max(0, settings.safeZoneRadius);
+    const inSafeZone = distScreen <= safeRadiusPx;
 
     const dxTrue = R.lastWorld.x - R.startWorld.x;
     const dyTrue = R.lastWorld.y - R.startWorld.y;
-    const distTrue = Math.hypot(dxTrue, dyTrue);
-    const safeRadius = Math.max(0, settings.safeZoneRadius);
-    const inSafeZone = distTrue <= safeRadius;
-
     const dominant = () => (Math.abs(dxTrue) >= Math.abs(dyTrue) ? "x" : "y");
 
     let liveAxis;
@@ -173,19 +214,31 @@ export function tick(e) {
         liveAxis = dominant(); // never engaged yet - provisional, display-only
     }
 
+    // While the aligner has anything stuck to it, orientation can't change
+    // at all - not even while re-passing through the safe zone - since
+    // swapping axis with nodes attached has no sensible physical meaning
+    // for a "stuck to a stick" gesture. This is unconditional, independent
+    // of RippleEdit.SafeZoneLockOrientation (which only governs the normal,
+    // nothing-stuck case above).
+    if (R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0) {
+        liveAxis = R.currentAxis;
+    }
+
     const mode = currentModeFromEvent(e);
+
+    // The icon/line should keep pointing the right way even while inside
+    // the safe zone (disengaged) - only the *magnitude* (and therefore any
+    // actual node movement) is held at zero there, not the direction.
+    const liveAxisIdx = liveAxis === "x" ? 0 : 1;
+    const liveRawDelta = liveAxisIdx === 0 ? dxTrue : dyTrue;
+    R.displayDir = Math.sign(liveRawDelta);
 
     if (inSafeZone) {
         restoreTrueOriginalPositions();
         R.currentAxis = null;
         R.currentMode = null;
         R.captured = null;
-        // Keep the distance readout consistent with the visual (which
-        // always tracks the raw, near-origin cursor while disengaged)
-        // instead of showing a stale number from the last time it was
-        // engaged.
         R.displayDelta = 0;
-        R.displayDir = 0;
     } else {
         const changed = R.currentAxis !== liveAxis || R.currentMode !== mode;
         if (changed) {
@@ -196,7 +249,7 @@ export function tick(e) {
             R.currentAxis = liveAxis;
             R.currentMode = mode;
         }
-        applyRipple();
+        applyRipple(); // also refines R.displayDir/R.displayDelta using the safe-zone-discounted math
     }
 
     R.displayAxis = liveAxis;

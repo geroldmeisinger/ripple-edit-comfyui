@@ -33,6 +33,7 @@ function startDrag(e) {
     resetDragState();
     R.isDragging = true;
     R.startWorld = world;
+    R.startLocal = localPoint;
     R.lastWorld = world;
     R.lastLocal = localPoint;
     R.trueOriginalPositions = snapshotCurrentPositions();
