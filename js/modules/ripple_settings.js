@@ -121,7 +121,15 @@ export function snapValue(v) {
 // may not visually update in real time under Nodes 2.0. We only warn about
 // this once per session rather than silently doing nothing.
 
-let warnedAboutVueNodes = false;
+// ---------------------------------------------------------------------------
+// Nodes 2.0 (Vue-rendered nodes) detection
+// ---------------------------------------------------------------------------
+// See https://docs.comfy.org/interface/nodes-2. Movement now works correctly
+// under Nodes 2.0 (see ripple_engine.js - positions are written via
+// `node.pos = [x, y]`, which goes through LiteGraph's setter and reaches the
+// Vue layout store, rather than `node.pos[0] = x`, which doesn't). This
+// detector is kept around only in case something else about Nodes 2.0 needs
+// special-casing in the future - nothing currently uses it.
 
 export function isVueNodesEnabled() {
     try {
@@ -129,22 +137,4 @@ export function isVueNodesEnabled() {
     } catch (err) {
         return false;
     }
-}
-
-export function warnAboutVueNodesOnce() {
-    if (warnedAboutVueNodes) return;
-    if (!isVueNodesEnabled()) return;
-    warnedAboutVueNodes = true;
-    console.warn(
-        "[RippleEdit] Nodes 2.0 (Comfy.VueNodes.Enabled) is on. ComfyUI's Vue node " +
-        "renderer stores positions in a separate layout store that this extension " +
-        "cannot currently write to directly, so moved nodes may not visually update " +
-        "in real time (this is a documented limitation of the current Nodes 2.0 " +
-        "implementation in general - e.g. the comfyui-housekeeper extension hits the " +
-        "same wall: 'Housekeeper writes node positions straight into litegraph's " +
-        "arrays, which that store does not see, so the buttons appear to do " +
-        "nothing.'). Node positions are still computed correctly here (useful if you " +
-        "later disable Nodes 2.0, or if something else reads node.pos). If this is " +
-        "disruptive, switch back to classic rendering via Settings > Comfy > Nodes 2.0."
-    );
 }

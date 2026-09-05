@@ -114,12 +114,13 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeL
 }
 
 /**
- * The mode icon: a triangle (tip at the line) for pusher/puller - reversed
- * for the pusher, so it reads as a wedge prying space open rather than an
- * arrow, vs. the puller's arrow pointing the direction it's pulling - or a
- * 3-bar "align to base" glyph for the aligner. Nothing is drawn past
- * `tipLocal` - the tip/base edge sits exactly there, and the shape extends
- * backward from it.
+ * The mode icon: a triangle for pusher/puller, or a 3-bar "align to base"
+ * glyph for the aligner. For the triangle, the *flat base* - not the point
+ * - sits exactly at `tipLocal`, with the point receding backward from
+ * there; this guarantees nothing is ever drawn past the cursor for either
+ * mode, and both pusher and puller use the same orientation now (there's no
+ * per-mode reversal needed once the base, not the tip, is what's flush with
+ * the line).
  */
 function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
     const d = dir === 0 ? 1 : dir;
@@ -143,18 +144,17 @@ function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
             }
         }
     } else {
-        const point = mode === RIPPLE_MODE.PUSHER ? -d : d;
         const len = 14;
         const halfWidth = 6;
         ctx.beginPath();
         if (axisIsX) {
-            ctx.moveTo(tipLocal.x, tipLocal.y);
-            ctx.lineTo(tipLocal.x - point * len, tipLocal.y - halfWidth);
-            ctx.lineTo(tipLocal.x - point * len, tipLocal.y + halfWidth);
+            ctx.moveTo(tipLocal.x, tipLocal.y - halfWidth);
+            ctx.lineTo(tipLocal.x, tipLocal.y + halfWidth);
+            ctx.lineTo(tipLocal.x - d * len, tipLocal.y);
         } else {
-            ctx.moveTo(tipLocal.x, tipLocal.y);
-            ctx.lineTo(tipLocal.x - halfWidth, tipLocal.y - point * len);
-            ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y - point * len);
+            ctx.moveTo(tipLocal.x - halfWidth, tipLocal.y);
+            ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y);
+            ctx.lineTo(tipLocal.x, tipLocal.y - d * len);
         }
         ctx.closePath();
         ctx.fill();
@@ -252,7 +252,8 @@ export function redrawOverlays() {
     // aligner. Only meaningful once you've scrolled to a finite length;
     // an infinite line shows the infinity symbol instead of a huge number.
     if (segInfo.overflowStart > 0 || segInfo.overflowEnd > 0) {
-        const overflowText = (px) => (segInfo.isInfinite ? "\u221E" : formatDistance("+", Math.round(px), "px"));
+        // No +/- sign here - an off-screen pixel count has no direction, only a magnitude.
+        const overflowText = (px) => (segInfo.isInfinite ? formatDistance("", "\u221E", "px") : formatDistance("", Math.round(px), "px"));
         if (axisIsX) {
             if (segInfo.overflowStart > 0) {
                 const p = toLabelSpace(cursorLocal.x + 8, 14);

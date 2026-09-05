@@ -55,30 +55,28 @@ export function computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoor
 }
 
 /**
- * ALIGNER (physical sweep, testing): once the sweeping line makes any
- * physical contact with a node - a simple overlap test, independent of
- * `NodeInclusionMode`, since a physical touch is binary and starts at the
- * first point of contact, not gated by a boundary-straddling setting - that
- * node sticks to it (magnetic) for the rest of this (axis, mode) run:
- * retracting the line pulls the node back with it, all the way until the
- * line passes the node's own original position, at which point it's
- * released. `NodeInclusionMode` *does* apply, in reverse, to a different
- * question - whether a stuck node stays stuck once the line's finite
- * length no longer reaches it perpendicular-wise (see ripple_engine.js
- * applyRipple, which handles that release and revokes `R.captured`
- * membership before this function ever runs for a shaken-off node).
+ * ALIGNER (physical sweep, testing): magnetic. Once the sweeping line
+ * touches a node - per `NodeInclusionMode`, the same combinator used
+ * everywhere else in this tool - that node sticks to it *unconditionally*
+ * for the rest of this (axis, mode) run: it keeps following the line's
+ * exact position even if the line retracts back past the node's own
+ * original spot (in contrast to the pusher/puller, which do return a node
+ * to its original position once their effect naturally shrinks back to
+ * zero). The only ways to detach a node once it's stuck are covered
+ * elsewhere: shaking it off perpendicular to the line (see
+ * ripple_engine.js's `R.captured` release logic) or ending/resetting the
+ * run (new axis, new mode, or back through the safe zone).
  */
-export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir) {
+export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion) {
     if (dir === 0) return 0;
 
     const sweptLo = Math.min(originCoord, cursorCoord);
     const sweptHi = Math.max(originCoord, cursorCoord);
-    const touchingNow = nodeMax > sweptLo && nodeMin < sweptHi;
+    const touchingNow = edgeIncluded((x) => x >= sweptLo && x <= sweptHi, nodeMin, nodeMax, inclusion);
     const eligible = R.captured.has(node) || touchingNow;
     if (!eligible) return 0;
     R.captured.add(node);
 
     const cRef = dir > 0 ? nodeMin : nodeMax; // the edge that stays flush with the line
-    let newRef = dir > 0 ? Math.max(cursorCoord, cRef) : Math.min(cursorCoord, cRef);
-    return newRef - cRef;
+    return cursorCoord - cRef; // magnetic - no clamp, follows the line unconditionally
 }

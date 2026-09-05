@@ -33,7 +33,7 @@
 
 import { app } from "../../../scripts/app.js";
 import { RIPPLE_MODE } from "./ripple_constants.js";
-import { settings, snapValue, warnAboutVueNodesOnce } from "./ripple_settings.js";
+import { settings, snapValue } from "./ripple_settings.js";
 import { getGraphCanvasEl, getScale, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
 import { R, currentModeFromEvent, getRememberedExtentPx } from "./ripple_state.js";
 import { computePushShift, computePullShift, computeAlignerShift, edgeIncluded } from "./ripple_math.js";
@@ -138,7 +138,7 @@ export function applyRipple() {
             const distFromTrueOrigin = Math.abs(c - originCoord);
             if (maxDist === -1 || distFromTrueOrigin <= maxDist) {
                 if (mode === RIPPLE_MODE.ALIGNER) {
-                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
+                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion);
                 } else if (mode === RIPPLE_MODE.PUSHER) {
                     shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
                 } else if (mode === RIPPLE_MODE.PULLER) {
@@ -148,27 +148,32 @@ export function applyRipple() {
         }
 
         const finalCoord = snapValue(shiftedCoord);
+        // Whole-array assignment (`node.pos = [x, y]`), never indexed
+        // (`node.pos[0] = x`). LiteGraph's `pos` is a getter/setter pair;
+        // the indexed form mutates the underlying array directly, which the
+        // classic canvas picks up by reading that same array back - but
+        // under Nodes 2.0 each item is positioned from a separate layout
+        // store that only the setter writes to, so an indexed write moves
+        // the model and leaves the node/group/reroute on screen exactly
+        // where it was. Going through the setter is correct for (and
+        // doesn't change anything about) classic rendering too.
         if (axisIdx === 0) {
-            node.pos[0] = finalCoord;
-            node.pos[1] = orig.y;
+            node.pos = [finalCoord, orig.y];
         } else {
-            node.pos[0] = orig.x;
-            node.pos[1] = finalCoord;
+            node.pos = [orig.x, finalCoord];
         }
     }
 
     if (app.canvas && typeof app.canvas.setDirty === "function") {
         app.canvas.setDirty(true, true);
     }
-    warnAboutVueNodesOnce();
 }
 
 export function restoreTrueOriginalPositions() {
     if (!R.trueOriginalPositions) return;
     for (const [node, orig] of R.trueOriginalPositions) {
         if (!node || !node.pos) continue;
-        node.pos[0] = orig.x;
-        node.pos[1] = orig.y;
+        node.pos = [orig.x, orig.y]; // whole-array assignment - see the note in applyRipple()
     }
     if (app.canvas && typeof app.canvas.setDirty === "function") {
         app.canvas.setDirty(true, true);

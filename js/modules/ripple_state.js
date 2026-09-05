@@ -80,25 +80,57 @@ export function snapshotPositions(nodes) {
     return m;
 }
 
+/**
+ * Every movable item this tool should reposition: nodes, groups, and native
+ * (link-metadata) reroutes. Groups and reroutes are read defensively, since
+ * their exact collection shape has shifted across LiteGraph/ComfyUI
+ * versions (array vs Map, `_groups` vs `groups`, etc) - if a given
+ * property doesn't exist on this version, that category is just skipped
+ * rather than throwing. All three are later treated uniformly: reroutes
+ * have no `.size`, which the existing "treat missing size as a 0-width
+ * point" handling in ripple_engine.js already covers with no extra code.
+ */
+export function getAllMovableObjects() {
+    const items = [];
+    const graph = app.graph;
+    if (!graph) return items;
+
+    const nodes = graph._nodes || [];
+    for (const n of nodes) if (n && n.pos) items.push(n);
+
+    try {
+        const groups = graph._groups || graph.groups || [];
+        for (const g of groups) if (g && g.pos) items.push(g);
+    } catch (err) {
+        /* group collection shape differs on this version - skip */
+    }
+
+    try {
+        const reroutesRaw = graph.reroutes;
+        if (reroutesRaw) {
+            const list = reroutesRaw instanceof Map ? [...reroutesRaw.values()] : Object.values(reroutesRaw);
+            for (const r of list) if (r && r.pos) items.push(r);
+        }
+    } catch (err) {
+        /* reroute collection shape differs on this version - skip */
+    }
+
+    return items;
+}
+
 export function snapshotCurrentPositions() {
-    const nodes = (app.graph && app.graph._nodes) || [];
-    return snapshotPositions(nodes);
+    return snapshotPositions(getAllMovableObjects());
 }
 
 // ---------------------------------------------------------------------------
 // Remembered ripple line length - persists across drags and across
 // mode/orientation changes within a drag; only a wheel event changes it.
-// `infiniteSource` tracks which side "infinite" was approached from
-// ("up" = grew past the upper threshold, "down" = shrank past the lower
-// one), so that scrolling further the same way is a no-op instead of
-// jumping, while scrolling the other way re-enters finite territory near
-// the boundary it's inside of. Every new drag resets it to "up" if the
-// line is currently infinite (per spec - a fresh drag always starts
-// "as if" approached from the wheel-up side).
+// Infinite is only ever reached by growing past the upper threshold (see
+// ripple_events.js) - shrinking floors at one scroll step instead, so there
+// is no separate "infinite from shrinking" state to track.
 // ---------------------------------------------------------------------------
 
 let rememberedExtentPxValue = null; // null = infinite
-let infiniteSourceValue = "up"; // "up" | "down" - only meaningful while extent is null
 
 export function getRememberedExtentPx() {
     return rememberedExtentPxValue;
@@ -106,12 +138,4 @@ export function getRememberedExtentPx() {
 
 export function setRememberedExtentPx(v) {
     rememberedExtentPxValue = v;
-}
-
-export function getInfiniteSource() {
-    return infiniteSourceValue;
-}
-
-export function setInfiniteSource(v) {
-    infiniteSourceValue = v;
 }
