@@ -34,7 +34,7 @@
 import { app } from "../../../scripts/app.js";
 import { RIPPLE_MODE } from "./ripple_constants.js";
 import { settings, snapValue } from "./ripple_settings.js";
-import { getGraphCanvasEl, getScale, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
+import { getScale, screenAxisToWorld, clientToCanvasLocal, canvasLocalToWorld, getCachedGraphCanvasRect, invalidateCanvasRectCache } from "./ripple_coords.js";
 import { R, currentModeFromEvent, getRememberedExtentPx } from "./ripple_state.js";
 import { computePushShift, computePullShift, computeAlignerShift, edgeIncluded } from "./ripple_math.js";
 import { redrawOverlays } from "./ripple_draw.js";
@@ -77,6 +77,10 @@ export function applyRipple() {
     const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
 
     const perpRange = getPerpWorldRange(perpIdx);
+    // Hoisted out of the per-node loop below - it only depends on
+    // `perpRange`, not on any per-node data, so there's no reason to
+    // allocate a fresh closure for every single node/group/reroute.
+    const perpTest = perpRange ? (x) => x >= perpRange[0] && x <= perpRange[1] : null;
 
     const rawDelta = rawCursorCoord - originCoord;
     const rawDir = Math.sign(rawDelta);
@@ -113,7 +117,6 @@ export function applyRipple() {
 
         const perpC = perpIdx === 0 ? orig.x : orig.y;
         const perpH = node.size ? node.size[perpIdx] : 0;
-        const perpTest = (x) => x >= perpRange[0] && x <= perpRange[1];
 
         // Being "stuck" to the puller/aligner and later falling outside the
         // line's finite length is a *release*: with the default "clear"
@@ -121,10 +124,7 @@ export function applyRipple() {
         // test to "is the node still fully within the line's reach" means
         // the node is released the instant even a sliver of it isn't -
         // which is what "clear" already means everywhere else, just
-        // visible here as an exit condition instead of an entry one. No
-        // separate "reversed" combinator needed - same `inclusion` setting,
-        // same test, applied to "am I still in range" instead of "did I
-        // just enter range".
+        // visible here as an exit condition instead of an entry one.
         const wasCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
         if (wasCaptured && perpRange) {
             const stillIn = edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
@@ -138,7 +138,7 @@ export function applyRipple() {
             const distFromTrueOrigin = Math.abs(c - originCoord);
             if (maxDist === -1 || distFromTrueOrigin <= maxDist) {
                 if (mode === RIPPLE_MODE.ALIGNER) {
-                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion);
+                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
                 } else if (mode === RIPPLE_MODE.PUSHER) {
                     shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
                 } else if (mode === RIPPLE_MODE.PULLER) {
@@ -186,7 +186,12 @@ export function restoreTrueOriginalPositions() {
 
 export function tick(e) {
     if (!R.isDragging) return;
-    if (!getGraphCanvasEl()) return;
+
+    // One fresh canvas-rect read per frame, shared by everything below
+    // (position conversion, the perpendicular filter, resizing the overlay
+    // canvases) rather than each of those independently forcing a reflow.
+    invalidateCanvasRectCache();
+    if (!getCachedGraphCanvasRect()) return;
 
     if (e && typeof e.clientX === "number") {
         const local = clientToCanvasLocal(e.clientX, e.clientY);
@@ -199,7 +204,15 @@ export function tick(e) {
     // header comment for why), independent of zoom.
     const distScreen = Math.hypot(R.lastLocal.x - R.startLocal.x, R.lastLocal.y - R.startLocal.y);
     const safeRadiusPx = Math.max(0, settings.safeZoneRadius);
-    const inSafeZone = distScreen <= safeRadiusPx;
+    let inSafeZone = distScreen <= safeRadiusPx;
+
+    // While anything is magnetically stuck to the aligner, the safe zone is
+    // bypassed entirely - stuck nodes keep following the line exactly as
+    // normal, and orientation stays locked, even if the cursor dips back
+    // near the origin. Disengaging (which would restore everything to its
+    // original position) makes no sense while something is still attached.
+    const alignerHasStuckNodes = R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0;
+    if (alignerHasStuckNodes) inSafeZone = false;
 
     const dxTrue = R.lastWorld.x - R.startWorld.x;
     const dyTrue = R.lastWorld.y - R.startWorld.y;
@@ -220,12 +233,13 @@ export function tick(e) {
     }
 
     // While the aligner has anything stuck to it, orientation can't change
-    // at all - not even while re-passing through the safe zone - since
-    // swapping axis with nodes attached has no sensible physical meaning
-    // for a "stuck to a stick" gesture. This is unconditional, independent
-    // of RippleEdit.SafeZoneLockOrientation (which only governs the normal,
+    // at all - not even while re-passing through the safe zone (handled
+    // above by bypassing the safe zone outright) - since swapping axis with
+    // nodes attached has no sensible physical meaning for a "stuck to a
+    // stick" gesture. This is unconditional, independent of
+    // RippleEdit.SafeZoneLockOrientation (which only governs the normal,
     // nothing-stuck case above).
-    if (R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0) {
+    if (alignerHasStuckNodes) {
         liveAxis = R.currentAxis;
     }
 

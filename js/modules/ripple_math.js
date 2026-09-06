@@ -55,24 +55,36 @@ export function computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoor
 }
 
 /**
- * ALIGNER (physical sweep, testing): magnetic. Once the sweeping line
- * touches a node - per `NodeInclusionMode`, the same combinator used
- * everywhere else in this tool - that node sticks to it *unconditionally*
- * for the rest of this (axis, mode) run: it keeps following the line's
- * exact position even if the line retracts back past the node's own
- * original spot (in contrast to the pusher/puller, which do return a node
- * to its original position once their effect naturally shrinks back to
- * zero). The only ways to detach a node once it's stuck are covered
- * elsewhere: shaking it off perpendicular to the line (see
- * ripple_engine.js's `R.captured` release logic) or ending/resetting the
- * run (new axis, new mode, or back through the safe zone).
+ * ALIGNER (physical sweep, testing): magnetic. The initial "touch" is a
+ * simple physical contact test (any overlap at all) - independent of
+ * `NodeInclusionMode` on purpose. That setting's combinator (especially the
+ * default "clear" = both edges must be inside) is exactly right for a
+ * region-membership question like the puller's, but applied to "has the
+ * sweeping line reached this node" it mathematically forces the far edge to
+ * be reached before anything happens (AND-of-both-endpoints on a growing,
+ * one-sided threshold always reduces to requiring the stricter/farther
+ * endpoint) - which is the "collision only registers at the far side of the
+ * node" bug. A physical touch should register at first contact, full stop.
+ * `NodeInclusionMode` still does meaningful work for the aligner elsewhere:
+ * whether a stuck node stays stuck once the line's finite length no longer
+ * reaches it perpendicular-wise (see ripple_engine.js).
+ *
+ * Once touched, a node sticks to the line *unconditionally* for the rest of
+ * this (axis, mode) run: it keeps following the line's exact position even
+ * if the line retracts back past the node's own original spot (in contrast
+ * to the pusher/puller, which do return a node to its original position
+ * once their effect naturally shrinks back to zero). The only ways to
+ * detach a node once it's stuck are covered elsewhere: shaking it off
+ * perpendicular to the line, or ending/resetting the run (new axis, new
+ * mode - the safe zone no longer counts as a reset while anything is stuck,
+ * see ripple_engine.js).
  */
-export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, inclusion) {
+export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir) {
     if (dir === 0) return 0;
 
     const sweptLo = Math.min(originCoord, cursorCoord);
     const sweptHi = Math.max(originCoord, cursorCoord);
-    const touchingNow = edgeIncluded((x) => x >= sweptLo && x <= sweptHi, nodeMin, nodeMax, inclusion);
+    const touchingNow = nodeMax > sweptLo && nodeMin < sweptHi;
     const eligible = R.captured.has(node) || touchingNow;
     if (!eligible) return 0;
     R.captured.add(node);

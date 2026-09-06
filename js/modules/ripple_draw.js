@@ -115,12 +115,13 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeL
 
 /**
  * The mode icon: a triangle for pusher/puller, or a 3-bar "align to base"
- * glyph for the aligner. For the triangle, the *flat base* - not the point
- * - sits exactly at `tipLocal`, with the point receding backward from
- * there; this guarantees nothing is ever drawn past the cursor for either
- * mode, and both pusher and puller use the same orientation now (there's no
- * per-mode reversal needed once the base, not the tip, is what's flush with
- * the line).
+ * glyph for the aligner. Both triangle orientations keep every vertex at or
+ * behind `tipLocal` in the direction of travel, so nothing is ever drawn
+ * past the cursor either way:
+ *   - puller: flat base flush at the cursor, point receding backward.
+ *   - pusher: point flush at the cursor, flat base receding backward -
+ *     the mirror image of the puller's, so the two read as visually
+ *     distinct (not just recolored) while both still stay fully "inside".
  */
 function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
     const d = dir === 0 ? 1 : dir;
@@ -147,14 +148,28 @@ function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
         const len = 14;
         const halfWidth = 6;
         ctx.beginPath();
-        if (axisIsX) {
-            ctx.moveTo(tipLocal.x, tipLocal.y - halfWidth);
-            ctx.lineTo(tipLocal.x, tipLocal.y + halfWidth);
-            ctx.lineTo(tipLocal.x - d * len, tipLocal.y);
+        if (mode === RIPPLE_MODE.PUSHER) {
+            // Point flush at the cursor, base receding backward.
+            if (axisIsX) {
+                ctx.moveTo(tipLocal.x, tipLocal.y);
+                ctx.lineTo(tipLocal.x - d * len, tipLocal.y - halfWidth);
+                ctx.lineTo(tipLocal.x - d * len, tipLocal.y + halfWidth);
+            } else {
+                ctx.moveTo(tipLocal.x, tipLocal.y);
+                ctx.lineTo(tipLocal.x - halfWidth, tipLocal.y - d * len);
+                ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y - d * len);
+            }
         } else {
-            ctx.moveTo(tipLocal.x - halfWidth, tipLocal.y);
-            ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y);
-            ctx.lineTo(tipLocal.x, tipLocal.y - d * len);
+            // Puller: flat base flush at the cursor, point receding backward.
+            if (axisIsX) {
+                ctx.moveTo(tipLocal.x, tipLocal.y - halfWidth);
+                ctx.lineTo(tipLocal.x, tipLocal.y + halfWidth);
+                ctx.lineTo(tipLocal.x - d * len, tipLocal.y);
+            } else {
+                ctx.moveTo(tipLocal.x - halfWidth, tipLocal.y);
+                ctx.lineTo(tipLocal.x + halfWidth, tipLocal.y);
+                ctx.lineTo(tipLocal.x, tipLocal.y - d * len);
+            }
         }
         ctx.closePath();
         ctx.fill();
@@ -282,15 +297,16 @@ export function redrawOverlays() {
 
     drawDistanceIndicator(overlayCtx, axisIsX, safeZoneEdgeLocal, cursorLocal);
 
+    // No +/- sign here either now - the mode's color/icon already conveys
+    // push vs. pull, and the label is just a magnitude.
     const distWorld = Math.abs(R.displayDelta);
-    const sign = mode === RIPPLE_MODE.PULLER ? "-" : "+";
     let distText;
     if (isAlwaysSnapEnabled()) {
         const g = getGridSize();
         const steps = g ? Math.round(distWorld / g) : 0;
-        distText = formatDistance(sign, steps, "x");
+        distText = formatDistance("", steps, "x");
     } else {
-        distText = formatDistance(sign, Math.round(distWorld), "px");
+        distText = formatDistance("", Math.round(distWorld), "px");
     }
     // Anchored behind the icon (opposite the direction of travel).
     const iconClearance = 22;

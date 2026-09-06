@@ -13,7 +13,7 @@
 
 import { app } from "../../../scripts/app.js";
 import { settings } from "./ripple_settings.js";
-import { getGraphCanvasEl, isPointInGraphCanvas, clientToCanvasLocal, canvasLocalToWorld } from "./ripple_coords.js";
+import { getGraphCanvasEl, isPointInGraphCanvas, clientToCanvasLocal, canvasLocalToWorld, invalidateCanvasRectCache, getCachedGraphCanvasRect } from "./ripple_coords.js";
 import { ensureOverlays, resizeOverlays, clearOverlays } from "./ripple_overlay.js";
 import { R, resetDragState, snapshotCurrentPositions, getRememberedExtentPx, setRememberedExtentPx } from "./ripple_state.js";
 import { tick, restoreTrueOriginalPositions } from "./ripple_engine.js";
@@ -43,6 +43,7 @@ function startDrag(e) {
 
 function endDrag() {
     if (!R.isDragging) return;
+    pendingPointerSnapshot = null;
     resetDragState();
     clearOverlays();
     if (app.canvas && typeof app.canvas.setDirty === "function") {
@@ -57,6 +58,7 @@ function endDrag() {
 
 function cancelDrag() {
     if (!R.isDragging) return;
+    pendingPointerSnapshot = null;
     restoreTrueOriginalPositions();
     resetDragState();
     clearOverlays();
@@ -77,9 +79,8 @@ function handleWheel(e) {
     e.preventDefault();
     e.stopPropagation();
 
-    const gcEl = getGraphCanvasEl();
-    if (!gcEl) return;
-    const rect = gcEl.getBoundingClientRect();
+    const rect = getCachedGraphCanvasRect();
+    if (!rect) return;
     const viewportExtent = R.displayAxis === "x" ? rect.height : rect.width;
     const step = Math.max(1, settings.scrollStepPercent);
     const upperThreshold = 100 + 5 * step;
@@ -109,6 +110,39 @@ function handleWheel(e) {
 // Event wiring
 // ---------------------------------------------------------------------------
 
+// Pointer devices can report far more `pointermove` events per second than
+// the display can even show (high-poll-rate mice routinely exceed 500Hz).
+// Previously every single event synchronously ran the full node/group/
+// reroute recompute *and* a full redraw - fine on paper, but the sheer
+// event rate (worse the more items a graph has) is what actually caused
+// the "very bad" render performance. Pointer state is still captured
+// synchronously on every event (so nothing is lost and the browser default
+// action is still reliably suppressed), but the actual `tick()` work is
+// coalesced to at most once per animation frame via `requestAnimationFrame`
+// - any extra events that arrive before the next frame just update the
+// pending snapshot instead of triggering additional work.
+let rafScheduled = false;
+let pendingPointerSnapshot = null;
+
+function schedulePointerTick(e) {
+    pendingPointerSnapshot = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+    };
+    if (rafScheduled) return;
+    rafScheduled = true;
+    requestAnimationFrame(() => {
+        rafScheduled = false;
+        if (pendingPointerSnapshot) {
+            tick(pendingPointerSnapshot);
+            pendingPointerSnapshot = null;
+        }
+    });
+}
+
 let attached = false;
 
 export function attachGlobalPointerListeners() {
@@ -120,6 +154,7 @@ export function attachGlobalPointerListeners() {
         (e) => {
             if (!settings.enabled) return;
             if (e.button !== 2 || !e.ctrlKey) return;
+            invalidateCanvasRectCache(); // pointerdown happens outside the per-frame tick cycle - force a fresh read
             if (!isPointInGraphCanvas(e.clientX, e.clientY)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -138,7 +173,7 @@ export function attachGlobalPointerListeners() {
             }
             e.preventDefault();
             e.stopImmediatePropagation();
-            tick(e);
+            schedulePointerTick(e);
         },
         { capture: true }
     );
@@ -150,6 +185,7 @@ export function attachGlobalPointerListeners() {
             if (e.button !== 2) return;
             e.preventDefault();
             e.stopImmediatePropagation();
+            pendingPointerSnapshot = null; // drop any pending coalesced move, we're done
             endDrag();
         },
         { capture: true }
@@ -202,6 +238,7 @@ export function attachGlobalSafetyListeners() {
         if (R.isDragging) endDrag();
     });
     window.addEventListener("resize", () => {
+        invalidateCanvasRectCache();
         if (R.isDragging) redrawOverlays();
     });
 }
@@ -210,6 +247,7 @@ export function attachResizeObserver() {
     const gcEl = getGraphCanvasEl();
     if (!gcEl || typeof ResizeObserver === "undefined") return false;
     const ro = new ResizeObserver(() => {
+        invalidateCanvasRectCache();
         if (R.isDragging) redrawOverlays();
     });
     ro.observe(gcEl);
