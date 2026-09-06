@@ -17,9 +17,11 @@ Ripple Edit makes space in your workflow by moving a group of nodes to the side 
 * `Mousewheel`: changes line length
 * `esc`: cancel and restore original positions (alternatively you can move into the safe-zone)
 
-If you like this extension, also check out my..
+This extension is frontend-only and completely safe. It only uses a `__init__.py` file to register the extension. Everything else happens in javascript context (no python files).
 
-Other project: **[ComfyUI OutputLists Combiner](https://github.com/geroldmeisinger/ComfyUI-outputlists-combiner) - supercharge multi-asset generation!**
+If you like this extension, also check out
+
+**[ComfyUI OutputLists Combiner](https://github.com/geroldmeisinger/ComfyUI-outputlists-combiner) - supercharge multi-asset generation!**
 
 # Installation
 
@@ -48,6 +50,8 @@ git clone https://github.com/geroldmeisinger/ripple-edit-comfyui
 
 * 0.0.2 better mousewheel behaviour, magnetic aligner, works with Nodes 2.0, groups and reroute knots
 * 0.0.1 initial version
+
+This project is vibe-coded.
 
 # Recommended third-party nodes
 
