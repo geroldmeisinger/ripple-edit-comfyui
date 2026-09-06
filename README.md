@@ -29,6 +29,8 @@ Search for ```Ripple Edit```
 
 ![Ripple Edit in ComfyUI-Manager](/media/ComfyUIManager.png)
 
+[Ripple Edit on Comfy Registry](https://registry.comfy.org/nodes/ripple-edit-comfyui)
+
 ## Comfy-CLI
 
 ```bash
