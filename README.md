@@ -42,6 +42,11 @@ cd custom_nodes # in ComfyUI/
 git clone https://github.com/geroldmeisinger/ripple-edit-comfyui
 ```
 
+# Changelog
+
+* 0.0.2 better mousewheel behaviour, magnetic aligner, works with Nodes 2.0, groups and reroute knots
+* 0.0.1 initial version
+
 # Recommended third-party nodes
 
 Here are some other node suites I recommend for layouting:
