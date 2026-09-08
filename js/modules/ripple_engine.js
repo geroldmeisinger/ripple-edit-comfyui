@@ -99,12 +99,15 @@ export function applyRipple() {
     const perpTest = perpRange ? (x) => x >= perpRange[0] && x <= perpRange[1] : null;
 
     const rawDelta = rawCursorCoord - originCoord;
-    // RippleEdit.SafeZoneLockOrientation, once a direction is established,
-    // freezes it (see tick()) - `R.forcedDir` carries that override in here.
-    // While forced, only the *magnitude* of displacement matters; the sign
-    // is pinned to whichever direction was locked in.
     const naturalDir = Math.sign(rawDelta);
-    const rawDir = R.forcedDir !== null ? R.forcedDir : naturalDir;
+    // RippleEdit.SafeZoneLockOrientation, once a direction is established,
+    // freezes it for the pusher/puller (see tick()) - `R.forcedDir` carries
+    // that override in here. The aligner deliberately ignores it: it's a
+    // direct physical interaction with wherever the line actually is, and
+    // "lock the direction" has no sensible meaning once something's
+    // magnetically attached to a stick that has to be able to move back the
+    // way it came.
+    const rawDir = mode !== RIPPLE_MODE.ALIGNER && R.forcedDir !== null ? R.forcedDir : naturalDir;
 
     let delta, dir, cursorCoord;
     if (mode === RIPPLE_MODE.ALIGNER) {
@@ -123,9 +126,20 @@ export function applyRipple() {
     R.displayDelta = delta;
     R.displayDir = dir;
 
+    // MaxDistance combined with NodeInclusionMode: "clear" (default) needs
+    // the node's *far* edge (in the direction of travel) within the cutoff -
+    // the most conservative reading, matching how "clear" already means
+    // "the harder-to-satisfy endpoint" everywhere else in this tool.
+    // "touching" only needs the *near* edge within it - the most inclusive.
+    // Both fall out of the same edgeIncluded() combinator already used
+    // elsewhere, applied to a one-sided "how far past origin, in the
+    // direction of travel" test instead of the old single-point check.
+    const maxDistTest = maxDist > 0 ? (x) => (x - originCoord) * dir <= maxDist : null;
+
     const visibleRange = getVisibleWorldRange(axisIdx);
     let offBefore = 0;
     let offAfter = 0;
+    R.currentlyAffected = new Set();
 
     for (const [node, orig] of R.trueOriginalPositions) {
         if (!node || !node.pos) continue;
@@ -152,22 +166,21 @@ export function applyRipple() {
         }
         const stillCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
         const inPerp = stillCaptured || !perpRange || edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
+        const withinMaxDist = !maxDistTest || edgeIncluded(maxDistTest, nodeMin, nodeMax, inclusion);
 
         let shiftedCoord = c;
         let affected = false;
-        if (inPerp) {
-            const distFromTrueOrigin = Math.abs(c - originCoord);
-            if (maxDist <= 0 || distFromTrueOrigin <= maxDist) {
-                if (mode === RIPPLE_MODE.ALIGNER) {
-                    shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
-                } else if (mode === RIPPLE_MODE.PUSHER) {
-                    shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
-                } else if (mode === RIPPLE_MODE.PULLER) {
-                    shiftedCoord = c + computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, delta, inclusion);
-                }
-                affected = shiftedCoord !== c;
+        if (inPerp && withinMaxDist) {
+            if (mode === RIPPLE_MODE.ALIGNER) {
+                shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
+            } else if (mode === RIPPLE_MODE.PUSHER) {
+                shiftedCoord = c + computePushShift(nodeMin, nodeMax, originCoord, dir, delta, inclusion);
+            } else if (mode === RIPPLE_MODE.PULLER) {
+                shiftedCoord = c + computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, delta, inclusion);
             }
+            affected = shiftedCoord !== c;
         }
+        if (affected) R.currentlyAffected.add(node);
 
         const finalCoord = snapValue(shiftedCoord);
         // Whole-array assignment (`node.pos = [x, y]`), never indexed
@@ -256,6 +269,10 @@ export function tick(e) {
     const alignerHasStuckNodes = R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0;
     if (alignerHasStuckNodes) disengaged = false;
 
+    // Mode is decided purely from the event's modifier keys, so it's safe
+    // to compute this early and use it below.
+    const mode = currentModeFromEvent(e);
+
     const dxTrue = R.lastWorld.x - R.startWorld.x;
     const dyTrue = R.lastWorld.y - R.startWorld.y;
     const dominant = () => (Math.abs(dxTrue) >= Math.abs(dyTrue) ? "x" : "y");
@@ -284,9 +301,10 @@ export function tick(e) {
     // real direction has been established it's frozen for the rest of the
     // drag too - not just the axis. While frozen, only the *magnitude* of
     // displacement from the origin matters; the literal screen direction
-    // that produced it doesn't.
+    // that produced it doesn't. Deliberately doesn't apply to the aligner
+    // (see the note in applyRipple() for why).
     let forcedDir = null;
-    if (settings.lockOrientationOutsideSafeZone) {
+    if (mode !== RIPPLE_MODE.ALIGNER && settings.lockOrientationOutsideSafeZone) {
         if (!disengaged) {
             const axisIdxNow = liveAxis === "x" ? 0 : 1;
             const rawNow = Math.sign(axisIdxNow === 0 ? dxTrue : dyTrue);
@@ -295,12 +313,27 @@ export function tick(e) {
             }
         }
         forcedDir = R.engagedDir;
-    } else {
+    } else if (mode !== RIPPLE_MODE.ALIGNER) {
         R.engagedDir = null;
     }
     R.forcedDir = forcedDir;
 
-    const mode = currentModeFromEvent(e);
+    // Direction-locked "dead zone": once a direction is locked in and the
+    // cursor is confirmed on the *wrong* side of the origin (outside the
+    // safe zone, in the opposite direction from the locked one), the tool
+    // stops doing anything at all for pusher/puller - not just while on
+    // that side, but for the rest of this drag, since the direction can't
+    // change to correct for it. The aligner is exempt: nodes stuck to it
+    // have to be able to follow it back across the origin (see
+    // computeAlignerShift/applyRipple), so there's no "wrong side" for it.
+    if (mode !== RIPPLE_MODE.ALIGNER && forcedDir !== null && !inSafeZone) {
+        const axisIdxNow = liveAxis === "x" ? 0 : 1;
+        const rawNow = Math.sign(axisIdxNow === 0 ? dxTrue : dyTrue);
+        if (rawNow !== 0 && rawNow !== forcedDir) {
+            R.deadZoneTriggered = true;
+        }
+    }
+    if (R.deadZoneTriggered) disengaged = true;
 
     // Icon/line direction keeps live-updating even while disengaged - only
     // the magnitude (and therefore any actual node movement) is held at
@@ -319,6 +352,7 @@ export function tick(e) {
         R.displayDelta = 0;
         R.displayOffscreenNodesBefore = 0;
         R.displayOffscreenNodesAfter = 0;
+        R.currentlyAffected = null;
     } else {
         const axisIdxNow = liveAxis === "x" ? 0 : 1;
         const rawDeltaNow = axisIdxNow === 0 ? dxTrue : dyTrue;

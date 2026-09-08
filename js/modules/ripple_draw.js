@@ -114,14 +114,15 @@ function drawRippleLine(ctx, rect, color, axisIsX, dir, cursorLocal) {
  * Marks the extent of the affected area (pusher/puller only - the aligner
  * has no "space" concept): a faint dotted line at each perpendicular end of
  * the visible line segment, running orthogonal to the ripple line (i.e.
- * along the drag axis) from the outer edge of the safe zone out to the
- * line - replacing what used to be a solid fill rectangle with a lighter
- * outline. If `RippleEdit.MaxDistance` is finite, an additional dotted line
- * parallel to the ripple line marks that cutoff distance from the origin.
+ * along the drag axis), starting at the tool line's current position and
+ * extending further in the direction of travel out to
+ * `RippleEdit.MaxDistance`'s cutoff point - a preview of how much further
+ * could still be affected. Only drawn when MaxDistance is finite; there's
+ * no fixed endpoint to show otherwise.
  */
-function drawAffectedAreaIndicators(ctx, axisIsX, dir, color, safeZoneEdgeLocal, cursorLocal, segStart, segEnd) {
-    const along0 = Math.min(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
-    const along1 = Math.max(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
+function drawAffectedAreaIndicators(ctx, axisIsX, color, cursorLocal, boundaryLocal, segStart, segEnd) {
+    const along0 = Math.min(cursorLocal[axisIsX ? "x" : "y"], boundaryLocal[axisIsX ? "x" : "y"]);
+    const along1 = Math.max(cursorLocal[axisIsX ? "x" : "y"], boundaryLocal[axisIsX ? "x" : "y"]);
 
     ctx.save();
     ctx.strokeStyle = color;
@@ -143,20 +144,18 @@ function drawAffectedAreaIndicators(ctx, axisIsX, dir, color, safeZoneEdgeLocal,
     ctx.restore();
 }
 
-function drawMaxDistanceBoundary(ctx, axisIsX, boundaryLocal, color, segStart, segEnd) {
+/** A dotted blue outline at an item's *original* position and size - a "ghost" of the pre-drag layout, for whatever is currently affected. */
+function drawGhostRect(ctx, topLeftLocal, bottomRightLocal) {
     ctx.save();
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = COLORS.ghost;
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    if (axisIsX) {
-        ctx.moveTo(boundaryLocal.x, segStart);
-        ctx.lineTo(boundaryLocal.x, segEnd);
-    } else {
-        ctx.moveTo(segStart, boundaryLocal.y);
-        ctx.lineTo(segEnd, boundaryLocal.y);
-    }
-    ctx.stroke();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(
+        topLeftLocal.x,
+        topLeftLocal.y,
+        bottomRightLocal.x - topLeftLocal.x,
+        bottomRightLocal.y - topLeftLocal.y
+    );
     ctx.restore();
 }
 
@@ -304,23 +303,34 @@ export function redrawOverlays() {
     // The outer edge of the safe-zone circle, in the current direction of
     // travel - the distance indicator and affected-area markers start here,
     // not at the origin's exact center.
+    const segInfo = drawRippleLine(overlayCtx, rect, drawColor, axisIsX, dir, cursorLocal);
+
+    // The outer edge of the safe-zone circle, in the current direction of
+    // travel - the distance indicator starts here, not at the origin's
+    // exact center.
     const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
     const safeZoneEdgeWorld = axisIsX
         ? { x: R.startWorld.x + safeRadiusGraph * (dir || 1), y: R.startWorld.y }
         : { x: R.startWorld.x, y: R.startWorld.y + safeRadiusGraph * (dir || 1) };
     const safeZoneEdgeLocal = worldToCanvasLocal(safeZoneEdgeWorld.x, safeZoneEdgeWorld.y);
 
-    const segInfo = drawRippleLine(overlayCtx, rect, drawColor, axisIsX, dir, cursorLocal);
+    if (mode !== RIPPLE_MODE.ALIGNER && settings.maxDistance > 0) {
+        const boundaryWorld = axisIsX
+            ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
+            : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
+        const boundaryLocal = worldToCanvasLocal(boundaryWorld.x, boundaryWorld.y);
+        drawAffectedAreaIndicators(overlayCtx, axisIsX, drawColor, cursorLocal, boundaryLocal, segInfo.segStart, segInfo.segEnd);
+    }
 
-    if (mode !== RIPPLE_MODE.ALIGNER) {
-        drawAffectedAreaIndicators(overlayCtx, axisIsX, dir, drawColor, safeZoneEdgeLocal, cursorLocal, segInfo.segStart, segInfo.segEnd);
-
-        if (settings.maxDistance > 0) {
-            const boundaryWorld = axisIsX
-                ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
-                : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
-            const boundaryLocal = worldToCanvasLocal(boundaryWorld.x, boundaryWorld.y);
-            drawMaxDistanceBoundary(overlayCtx, axisIsX, boundaryLocal, drawColor, segInfo.segStart, segInfo.segEnd);
+    // Ghost outlines of whatever is actually affected right now, at its
+    // *original* (pre-drag) position and size.
+    if (R.currentlyAffected && R.currentlyAffected.size > 0 && R.trueOriginalPositions) {
+        for (const item of R.currentlyAffected) {
+            const orig = R.trueOriginalPositions.get(item);
+            if (!orig || !item.size) continue;
+            const topLeft = worldToCanvasLocal(orig.x, orig.y);
+            const bottomRight = worldToCanvasLocal(orig.x + item.size[0], orig.y + item.size[1]);
+            drawGhostRect(overlayCtx, topLeft, bottomRight);
         }
     }
 
@@ -386,13 +396,24 @@ export function redrawOverlays() {
     } else {
         distText = formatDistance("", Math.round(distWorld), "px");
     }
-    // Right next to the icon, offset purely along the drag axis (behind it,
-    // opposite the direction of travel) - centered on the cursor along the
-    // *other* axis, not shifted off of it.
-    const iconClearance = 22;
+    // Right next to the icon, with a real gap - offset purely along the
+    // drag axis (behind it, opposite the direction of travel), centered on
+    // the cursor along the *other* axis, not shifted off of it. The offset
+    // accounts for the icon's own length, a fixed visual gap, and half the
+    // label's own size (its width when offsetting horizontally, its fixed
+    // 16px height when offsetting vertically) so there's always daylight
+    // between the two regardless of how wide the text is.
+    const iconLen = 14;
+    const gap = 6;
+    labelCtx.save();
+    labelCtx.font = "11px monospace";
+    const textWidth = labelCtx.measureText(distText).width + 8;
+    labelCtx.restore();
+    const halfLabelDim = axisIsX ? textWidth / 2 : 8;
+    const offset = iconLen + gap + halfLabelDim;
     const labelLocal = axisIsX
-        ? { x: cursorLocal.x - (dir || 1) * iconClearance, y: cursorLocal.y }
-        : { x: cursorLocal.x, y: cursorLocal.y - (dir || 1) * iconClearance };
+        ? { x: cursorLocal.x - (dir || 1) * offset, y: cursorLocal.y }
+        : { x: cursorLocal.x, y: cursorLocal.y - (dir || 1) * offset };
     const labelPos = toLabelSpace(labelLocal.x, labelLocal.y);
     drawLabel(labelCtx, distText, labelPos.x, labelPos.y, "center");
 }

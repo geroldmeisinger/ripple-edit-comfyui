@@ -23,6 +23,7 @@ export const COLORS = {
     helperLine: "rgba(210, 210, 210, 0.55)",
     labelText: "rgba(255, 255, 255, 0.9)",
     labelBg: "rgba(0, 0, 0, 0.6)",
+    ghost: "rgba(70, 140, 255, 0.85)", // original-position/size outline
 };
 
 export const DEFAULTS = {

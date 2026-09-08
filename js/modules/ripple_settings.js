@@ -38,12 +38,12 @@ export function registerSettings() {
     };
 
     add("RippleEdit.Enabled", "Ripple Edit: Enable Ctrl+Right-drag tool", "boolean", DEFAULTS.enabled, "enabled");
-    add("RippleEdit.SafeZoneRadius", "Ripple Edit: Safe zone - radius around origin before anything moves (display px, independent of zoom)", "number", DEFAULTS.safeZoneRadius, "safeZoneRadius");
-    add("RippleEdit.SafeZoneOrientationTimeoutMs", "Ripple Edit: Safe zone - time cursor must be away from origin before orientation locks in (ms)", "number", DEFAULTS.safeZoneOrientationTimeoutMs, "safeZoneOrientationTimeoutMs");
+    add("RippleEdit.SafeZoneRadius", "Ripple Edit: Safe zone - radius around origin before anything moves (display px, independent of zoom)", "number", DEFAULTS.safeZoneRadius, "safeZoneRadius", { attrs: { min: 0 } });
+    add("RippleEdit.SafeZoneOrientationTimeoutMs", "Ripple Edit: Safe zone - time cursor must be away from origin before orientation locks in (ms)", "number", DEFAULTS.safeZoneOrientationTimeoutMs, "safeZoneOrientationTimeoutMs", { attrs: { min: 0 } });
     add("RippleEdit.SafeZoneLockOrientation", "Ripple Edit: Safe zone - lock orientation AND direction once engaged (no changes at all for the rest of the drag)", "boolean", DEFAULTS.lockOrientationOutsideSafeZone, "lockOrientationOutsideSafeZone");
-    add("RippleEdit.MaxDistance", "Ripple Edit: Maximum node distance from origin affected, 0 = infinite (graph units)", "number", DEFAULTS.maxDistance, "maxDistance");
-    add("RippleEdit.LineWidth", "Ripple Edit: Ripple line thickness (px)", "number", DEFAULTS.lineWidth, "lineWidth");
-    add("RippleEdit.ScrollStepPercent", "Ripple Edit: Scroll-wheel resize step (% of current viewport dimension)", "number", DEFAULTS.scrollStepPercent, "scrollStepPercent");
+    add("RippleEdit.MaxDistance", "Ripple Edit: Maximum node distance from origin affected, 0 = infinite (graph units)", "number", DEFAULTS.maxDistance, "maxDistance", { attrs: { min: 0 } });
+    add("RippleEdit.LineWidth", "Ripple Edit: Ripple line thickness (px)", "number", DEFAULTS.lineWidth, "lineWidth", { attrs: { min: 1 } });
+    add("RippleEdit.ScrollStepPercent", "Ripple Edit: Scroll-wheel resize step (% of current viewport dimension)", "number", DEFAULTS.scrollStepPercent, "scrollStepPercent", { attrs: { min: 1, max: 100 } });
     add(
         "RippleEdit.NodeInclusionMode",
         "Ripple Edit: How boundary-straddling nodes are counted",

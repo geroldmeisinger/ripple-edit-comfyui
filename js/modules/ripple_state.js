@@ -45,6 +45,7 @@ export const R = {
     // direction has been established, that direction (not just the axis)
     // is frozen for the rest of the drag.
     engagedDir: null,          // signed 1/-1 | null
+    deadZoneTriggered: null,   // once true (pusher/puller only, direction-locked), stays true for the rest of the drag - see ripple_engine.js
 
     // The 150ms-by-default orientation-decision timer (RippleEdit.SafeZoneOrientationTimeoutMs).
     // Resets to "not started" whenever the cursor is exactly back at the
@@ -63,6 +64,7 @@ export const R = {
     displayDir: 0,
     displayOffscreenNodesBefore: 0, // count of affected items positioned off-screen, each side
     displayOffscreenNodesAfter: 0,
+    currentlyAffected: null,   // Set(item) - whatever is actually being moved this frame, for the ghost-rectangle visual
 };
 
 export function resetDragState() {
@@ -79,6 +81,7 @@ export function resetDragState() {
     R.captured = null;
     R.captureDir = null;
     R.engagedDir = null;
+    R.deadZoneTriggered = null;
     R.awayFromOriginSince = null;
     R.displayAxis = null;
     R.displayMode = RIPPLE_MODE.PUSHER;
@@ -89,6 +92,7 @@ export function resetDragState() {
     R.displayDir = 0;
     R.displayOffscreenNodesBefore = 0;
     R.displayOffscreenNodesAfter = 0;
+    R.currentlyAffected = null;
 }
 
 export function currentModeFromEvent(e) {
