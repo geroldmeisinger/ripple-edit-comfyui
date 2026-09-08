@@ -36,8 +36,12 @@ export function computePushShift(nodeMin, nodeMax, originCoord, dir, delta, incl
  * otherwise reclassify them - this is what prevents the "snaps back to
  * original position" glitch. There is deliberately no clamp on how far a
  * node can be pulled - it can be pulled straight through and past the
- * origin with no limit. `R.captured` is reset whenever axis or mode changes
- * (see ripple_engine.js).
+ * origin with no limit. `R.captured` is reset whenever axis or mode
+ * changes, *and* whenever the drag direction reverses back across the
+ * origin within the same axis/mode (see ripple_engine.js) - without that
+ * second reset, nodes captured while pulling one way would keep being
+ * pulled by a now-backwards-signed `delta` even after the user reversed
+ * course to pull from the other side instead.
  */
 export function computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, delta, inclusion) {
     if (dir === 0) return 0;
@@ -78,17 +82,29 @@ export function computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoor
  * perpendicular to the line, or ending/resetting the run (new axis, new
  * mode - the safe zone no longer counts as a reset while anything is stuck,
  * see ripple_engine.js).
+ *
+ * `R.captureDir` remembers which edge (nodeMin vs. nodeMax) was flush with
+ * the line at the *moment of capture*, and that choice is kept for the rest
+ * of the run instead of being re-decided from the live `dir` every frame.
+ * Without this, a node captured while pushing rightward and then dragged
+ * all the way back past the *origin itself* (not just past the node's own
+ * start - `dir`'s sign flips at the origin, not at the node) would suddenly
+ * swap which of its edges is "the flush one" mid-frame, producing a sudden
+ * jump to a completely different position instead of continuing smoothly.
  */
 export function computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir) {
-    if (dir === 0) return 0;
+    const alreadyCaptured = R.captured.has(node);
+    if (!alreadyCaptured) {
+        if (dir === 0) return 0;
+        const sweptLo = Math.min(originCoord, cursorCoord);
+        const sweptHi = Math.max(originCoord, cursorCoord);
+        const touchingNow = nodeMax > sweptLo && nodeMin < sweptHi;
+        if (!touchingNow) return 0;
+        R.captured.add(node);
+        R.captureDir.set(node, dir);
+    }
 
-    const sweptLo = Math.min(originCoord, cursorCoord);
-    const sweptHi = Math.max(originCoord, cursorCoord);
-    const touchingNow = nodeMax > sweptLo && nodeMin < sweptHi;
-    const eligible = R.captured.has(node) || touchingNow;
-    if (!eligible) return 0;
-    R.captured.add(node);
-
-    const cRef = dir > 0 ? nodeMin : nodeMax; // the edge that stays flush with the line
+    const capturedDir = R.captureDir.get(node);
+    const cRef = capturedDir > 0 ? nodeMin : nodeMax; // decided once, at capture time - never re-decided
     return cursorCoord - cRef; // magnetic - no clamp, follows the line unconditionally
 }

@@ -37,14 +37,32 @@ export const R = {
     // moved nodes back to `trueOriginalPositions` first.
     currentAxis: null,         // "x" | "y" | null
     currentMode: null,         // RIPPLE_MODE.*
+    currentDir: null,          // signed 1/-1 direction the current run started in (puller-only; see below)
     captured: null,            // Set(node) - sticky pull/align set for the current (axis, mode) run
+    captureDir: null,          // Map(node -> dir) - aligner only, see the note in ripple_math.js
+
+    // RippleEdit.SafeZoneLockOrientation, extended: once it's on and a
+    // direction has been established, that direction (not just the axis)
+    // is frozen for the rest of the drag.
+    engagedDir: null,          // signed 1/-1 | null
+
+    // The 150ms-by-default orientation-decision timer (RippleEdit.SafeZoneOrientationTimeoutMs).
+    // Resets to "not started" whenever the cursor is exactly back at the
+    // origin; starts counting the instant it first moves away from it.
+    awayFromOriginSince: null, // timestamp (ms) | null
 
     // Cached, for rendering (see ripple_engine.js applyRipple()).
     displayAxis: null,
     displayMode: RIPPLE_MODE.PUSHER,
-    displayInSafeZone: true,
+    displayInSafeZone: true,   // true spatial safe-zone membership only - controls whether the
+                                // line is shown at all (vs. icon-only)
+    displayDisengaged: true,   // inSafeZone OR the orientation timer hasn't elapsed yet - controls
+                                // grey-vs-colored and whether nodes actually move
+    displayAtExactOrigin: true, // cursor exactly at the origin point - icon isn't drawn here at all
     displayDelta: 0,           // signed; safe-zone-discounted for pusher/puller, raw for aligner
     displayDir: 0,
+    displayOffscreenNodesBefore: 0, // count of affected items positioned off-screen, each side
+    displayOffscreenNodesAfter: 0,
 };
 
 export function resetDragState() {
@@ -57,12 +75,20 @@ export function resetDragState() {
     R.engagedAxis = null;
     R.currentAxis = null;
     R.currentMode = null;
+    R.currentDir = null;
     R.captured = null;
+    R.captureDir = null;
+    R.engagedDir = null;
+    R.awayFromOriginSince = null;
     R.displayAxis = null;
     R.displayMode = RIPPLE_MODE.PUSHER;
     R.displayInSafeZone = true;
+    R.displayDisengaged = true;
+    R.displayAtExactOrigin = true;
     R.displayDelta = 0;
     R.displayDir = 0;
+    R.displayOffscreenNodesBefore = 0;
+    R.displayOffscreenNodesAfter = 0;
 }
 
 export function currentModeFromEvent(e) {

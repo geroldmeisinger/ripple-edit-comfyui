@@ -1,23 +1,31 @@
 /**
- * All overlay drawing: origin/safe-zone marker, ripple line + fill rectangle
- * (edge-aligned so nothing is drawn past the cursor), the push/pull/align
- * mode icon, the distance indicator, and the two label types (distance-moved
- * and off-screen overflow).
+ * All overlay drawing: origin/safe-zone marker, the ripple line (edge-
+ * aligned so nothing is drawn past the cursor), the push/pull/align mode
+ * icon, the affected-area indicators, the distance indicator, and the
+ * label types (distance-moved, off-screen length overflow, and off-screen
+ * affected-item count).
  *
- * Visual positioning (the line, rectangle, and icon) always tracks the raw
- * cursor position - never the safe-zone-discounted "effective" position
- * used for actually computing node shifts. Using the discounted position
- * for visuals made the line/icon visibly lag behind the cursor and feel
- * "stuck" in the safe zone. The *numbers* shown (the distance label) still
- * use the discounted amount, since that's the actual effect size - only the
+ * Visual positioning (the line and icon) always tracks the raw cursor
+ * position - never the safe-zone-discounted "effective" position used for
+ * actually computing node shifts. Using the discounted position for
+ * visuals made the line/icon visibly lag behind the cursor and feel "stuck"
+ * in the safe zone. The *numbers* shown (the distance label) still use the
+ * discounted amount, since that's the actual effect size - only the
  * drawing position is raw.
  *
  * The safe-zone radius is configured in *display* pixels (see
  * ripple_engine.js for why) - the origin-marker circle is drawn at that
- * exact radius, unscaled by zoom, while the rectangle/distance-indicator's
- * "outer edge of the safe zone" start point is computed in graph units
- * (radius / current zoom scale), since that has to combine with node
- * positions, which live in graph space.
+ * exact radius, unscaled by zoom, while the distance-indicator's "outer
+ * edge of the safe zone" start point is computed in graph units (radius /
+ * current zoom scale), since that has to combine with node positions,
+ * which live in graph space.
+ *
+ * `R.displayInSafeZone` (true spatial safe-zone membership) controls
+ * whether the line is shown at all. `R.displayDisengaged` (in the safe
+ * zone OR the orientation-decision timer hasn't elapsed - see
+ * ripple_engine.js) controls grey-vs-colored. These are deliberately
+ * different: once you've left the safe zone, the (greyed) line is visible
+ * even before the timer elapses.
  */
 
 import { COLORS, RIPPLE_MODE } from "./ripple_constants.js";
@@ -27,14 +35,14 @@ import { R, getRememberedExtentPx } from "./ripple_state.js";
 import { ensureOverlays, resizeOverlays, clearOverlays, overlayCtx, labelCtx } from "./ripple_overlay.js";
 
 function paletteFor(mode) {
-    if (mode === RIPPLE_MODE.PULLER) return { line: settings.pullerLineColor, fill: settings.pullerFillColor };
-    if (mode === RIPPLE_MODE.ALIGNER) return { line: settings.alignerLineColor, fill: settings.alignerFillColor };
-    return { line: settings.pusherLineColor, fill: settings.pusherFillColor };
+    if (mode === RIPPLE_MODE.PULLER) return settings.pullerLineColor;
+    if (mode === RIPPLE_MODE.ALIGNER) return settings.alignerLineColor;
+    return settings.pusherLineColor;
 }
 
 function drawOriginMarker(ctx, originLocal, mode) {
     const radiusPx = Math.max(0, settings.safeZoneRadius); // display px, unscaled - see module header
-    const color = paletteFor(mode).line;
+    const color = paletteFor(mode);
     ctx.save();
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
@@ -63,14 +71,13 @@ function drawOriginMarker(ctx, originLocal, mode) {
  * Draws the ripple line as a filled, edge-aligned rectangle: the forward
  * edge (in the direction of travel) sits exactly at `cursorLocal`, and the
  * full thickness extends backward from there - nothing is ever drawn past
- * the cursor. Also draws the fill rectangle between the outer edge of the
- * safe zone and the line (skipped for the aligner, which has no "space"
- * concept). An infinite line is drawn at double the viewport dimension,
+ * the cursor. An infinite line is drawn at double the viewport dimension,
  * centered on the cursor, so it always reaches both edges regardless of
- * where the cursor currently is. Returns segment info used for the
- * overflow label.
+ * where the cursor currently is. Returns segment info used by the affected-
+ * area indicators and the overflow label. There is no filled "affected
+ * space" rectangle anymore - see `drawAffectedAreaIndicators`.
  */
-function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeLocal, cursorLocal) {
+function drawRippleLine(ctx, rect, color, axisIsX, dir, cursorLocal) {
     const viewportExtent = axisIsX ? rect.height : rect.width;
     const perpCenter = axisIsX ? cursorLocal.y : cursorLocal.x;
 
@@ -81,19 +88,9 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeL
     const clippedStart = Math.max(0, segStart);
     const clippedEnd = Math.min(viewportExtent, segEnd);
 
-    if (mode !== RIPPLE_MODE.ALIGNER) {
-        const along0 = Math.min(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
-        const along1 = Math.max(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
-        ctx.save();
-        ctx.fillStyle = palette.fill;
-        if (axisIsX) ctx.fillRect(along0, clippedStart, along1 - along0, clippedEnd - clippedStart);
-        else ctx.fillRect(clippedStart, along0, clippedEnd - clippedStart, along1 - along0);
-        ctx.restore();
-    }
-
     const lw = Math.max(1, settings.lineWidth);
     ctx.save();
-    ctx.fillStyle = palette.line;
+    ctx.fillStyle = color;
     if (axisIsX) {
         const x0 = dir >= 0 ? cursorLocal.x - lw : cursorLocal.x;
         ctx.fillRect(x0, clippedStart, lw, clippedEnd - clippedStart);
@@ -106,11 +103,61 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeL
     return {
         isInfinite: extentPx === null,
         viewportExtent,
-        segStart,
-        segEnd,
+        segStart: clippedStart,
+        segEnd: clippedEnd,
         overflowStart: Math.max(0, -segStart),
         overflowEnd: Math.max(0, segEnd - viewportExtent),
     };
+}
+
+/**
+ * Marks the extent of the affected area (pusher/puller only - the aligner
+ * has no "space" concept): a faint dotted line at each perpendicular end of
+ * the visible line segment, running orthogonal to the ripple line (i.e.
+ * along the drag axis) from the outer edge of the safe zone out to the
+ * line - replacing what used to be a solid fill rectangle with a lighter
+ * outline. If `RippleEdit.MaxDistance` is finite, an additional dotted line
+ * parallel to the ripple line marks that cutoff distance from the origin.
+ */
+function drawAffectedAreaIndicators(ctx, axisIsX, dir, color, safeZoneEdgeLocal, cursorLocal, segStart, segEnd) {
+    const along0 = Math.min(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
+    const along1 = Math.max(safeZoneEdgeLocal[axisIsX ? "x" : "y"], cursorLocal[axisIsX ? "x" : "y"]);
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    if (axisIsX) {
+        ctx.moveTo(along0, segStart);
+        ctx.lineTo(along1, segStart);
+        ctx.moveTo(along0, segEnd);
+        ctx.lineTo(along1, segEnd);
+    } else {
+        ctx.moveTo(segStart, along0);
+        ctx.lineTo(segEnd, along0);
+        ctx.moveTo(segStart, along1);
+        ctx.lineTo(segEnd, along1);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawMaxDistanceBoundary(ctx, axisIsX, boundaryLocal, color, segStart, segEnd) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    if (axisIsX) {
+        ctx.moveTo(boundaryLocal.x, segStart);
+        ctx.lineTo(boundaryLocal.x, segEnd);
+    } else {
+        ctx.moveTo(segStart, boundaryLocal.y);
+        ctx.lineTo(segEnd, boundaryLocal.y);
+    }
+    ctx.stroke();
+    ctx.restore();
 }
 
 /**
@@ -122,6 +169,8 @@ function drawRippleVisuals(ctx, rect, palette, mode, axisIsX, dir, safeZoneEdgeL
  *   - pusher: point flush at the cursor, flat base receding backward -
  *     the mirror image of the puller's, so the two read as visually
  *     distinct (not just recolored) while both still stay fully "inside".
+ * Not drawn at all while the cursor is exactly at the origin - the
+ * direction is undefined there (see ripple_engine.js).
  */
 function drawModeIcon(ctx, mode, axisIsX, dir, tipLocal, color) {
     const d = dir === 0 ? 1 : dir;
@@ -227,7 +276,8 @@ export function redrawOverlays() {
 
     const axis = R.displayAxis;
     const mode = R.displayMode;
-    const inSafeZone = R.displayInSafeZone;
+    const inSafeZone = R.displayInSafeZone; // true spatial membership - line visibility only
+    const disengaged = R.displayDisengaged; // safe zone OR orientation timer not elapsed - grey vs colored
 
     const originLocal = worldToCanvasLocal(R.startWorld.x, R.startWorld.y);
     drawOriginMarker(overlayCtx, originLocal, mode);
@@ -236,22 +286,23 @@ export function redrawOverlays() {
     const axisIsX = axis === "x";
     const dir = R.displayDir;
     const cursorLocal = R.lastLocal || worldToCanvasLocal(R.lastWorld.x, R.lastWorld.y);
-    const palette = paletteFor(mode);
-    const drawColor = inSafeZone ? COLORS.disengaged.line : palette.line;
-    const drawPalette = inSafeZone ? COLORS.disengaged : palette;
+    const drawColor = disengaged ? COLORS.disengaged.line : paletteFor(mode);
 
     // Before ever engaging (leaving the safe zone) at least once this drag,
     // we don't know the eventual orientation/effect yet, so only the icon
-    // is shown - no line, no rectangle, no distance info. Once engaged at
-    // least once, returning to the safe zone shows the line again, greyed -
-    // and its direction keeps live-updating with the cursor even then.
-    const neverEngagedYet = inSafeZone && R.engagedAxis === null;
+    // is shown - no line, no distance info. Once engaged at least once,
+    // returning to the safe zone shows the line again, greyed. The icon
+    // itself is never drawn while the cursor is exactly at the origin - the
+    // direction is undefined there.
+    const neverLeftSafeZoneYet = inSafeZone && R.engagedAxis === null;
 
-    drawModeIcon(overlayCtx, mode, axisIsX, dir, cursorLocal, drawColor);
-    if (neverEngagedYet) return;
+    if (!R.displayAtExactOrigin) {
+        drawModeIcon(overlayCtx, mode, axisIsX, dir, cursorLocal, drawColor);
+    }
+    if (neverLeftSafeZoneYet) return;
 
     // The outer edge of the safe-zone circle, in the current direction of
-    // travel - both the rectangle and the distance indicator start here,
+    // travel - the distance indicator and affected-area markers start here,
     // not at the origin's exact center.
     const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
     const safeZoneEdgeWorld = axisIsX
@@ -259,15 +310,26 @@ export function redrawOverlays() {
         : { x: R.startWorld.x, y: R.startWorld.y + safeRadiusGraph * (dir || 1) };
     const safeZoneEdgeLocal = worldToCanvasLocal(safeZoneEdgeWorld.x, safeZoneEdgeWorld.y);
 
-    const segInfo = drawRippleVisuals(overlayCtx, rect, drawPalette, mode, axisIsX, dir, safeZoneEdgeLocal, cursorLocal);
+    const segInfo = drawRippleLine(overlayCtx, rect, drawColor, axisIsX, dir, cursorLocal);
+
+    if (mode !== RIPPLE_MODE.ALIGNER) {
+        drawAffectedAreaIndicators(overlayCtx, axisIsX, dir, drawColor, safeZoneEdgeLocal, cursorLocal, segInfo.segStart, segInfo.segEnd);
+
+        if (settings.maxDistance > 0) {
+            const boundaryWorld = axisIsX
+                ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
+                : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
+            const boundaryLocal = worldToCanvasLocal(boundaryWorld.x, boundaryWorld.y);
+            drawMaxDistanceBoundary(overlayCtx, axisIsX, boundaryLocal, drawColor, segInfo.segStart, segInfo.segEnd);
+        }
+    }
 
     const toLabelSpace = (localX, localY) => ({ x: rect.left + localX, y: rect.top + localY });
 
-    // Off-screen overflow labels - shown for every mode, including the
-    // aligner. Only meaningful once you've scrolled to a finite length;
+    // Off-screen *length* overflow labels - shown for every mode, including
+    // the aligner. Only meaningful once you've scrolled to a finite length;
     // an infinite line shows the infinity symbol instead of a huge number.
     if (segInfo.overflowStart > 0 || segInfo.overflowEnd > 0) {
-        // No +/- sign here - an off-screen pixel count has no direction, only a magnitude.
         const overflowText = (px) => (segInfo.isInfinite ? formatDistance("", "\u221E", "px") : formatDistance("", Math.round(px), "px"));
         if (axisIsX) {
             if (segInfo.overflowStart > 0) {
@@ -290,6 +352,22 @@ export function redrawOverlays() {
         }
     }
 
+    // Off-screen *affected item count* labels, at the workspace edges along
+    // the drag axis (a different pair of edges than the length-overflow
+    // labels above, so the two never collide).
+    const before = R.displayOffscreenNodesBefore;
+    const after = R.displayOffscreenNodesAfter;
+    if (before > 0 || after > 0) {
+        const countText = (n) => `+ ${n} node${n === 1 ? "" : "s"}`;
+        if (axisIsX) {
+            if (before > 0) drawLabel(labelCtx, countText(before), rect.left + 6, rect.top + cursorLocal.y, "left");
+            if (after > 0) drawLabel(labelCtx, countText(after), rect.left + rect.width - 6, rect.top + cursorLocal.y, "right");
+        } else {
+            if (before > 0) drawLabel(labelCtx, countText(before), rect.left + cursorLocal.x, rect.top + 16, "center");
+            if (after > 0) drawLabel(labelCtx, countText(after), rect.left + cursorLocal.x, rect.top + rect.height - 16, "center");
+        }
+    }
+
     // Bug fix: the aligner is a direct physical interaction with the line's
     // absolute position - "distance from origin" isn't a meaningful concept
     // for it, so no distance indicator/label is drawn for that mode.
@@ -297,8 +375,8 @@ export function redrawOverlays() {
 
     drawDistanceIndicator(overlayCtx, axisIsX, safeZoneEdgeLocal, cursorLocal);
 
-    // No +/- sign here either now - the mode's color/icon already conveys
-    // push vs. pull, and the label is just a magnitude.
+    // No +/- sign - the mode's color/icon already conveys push vs. pull,
+    // and the label is just a magnitude.
     const distWorld = Math.abs(R.displayDelta);
     let distText;
     if (isAlwaysSnapEnabled()) {
@@ -308,11 +386,13 @@ export function redrawOverlays() {
     } else {
         distText = formatDistance("", Math.round(distWorld), "px");
     }
-    // Anchored behind the icon (opposite the direction of travel).
+    // Right next to the icon, offset purely along the drag axis (behind it,
+    // opposite the direction of travel) - centered on the cursor along the
+    // *other* axis, not shifted off of it.
     const iconClearance = 22;
     const labelLocal = axisIsX
-        ? { x: cursorLocal.x - (dir || 1) * iconClearance, y: cursorLocal.y - 14 }
-        : { x: cursorLocal.x + 14, y: cursorLocal.y - (dir || 1) * iconClearance };
+        ? { x: cursorLocal.x - (dir || 1) * iconClearance, y: cursorLocal.y }
+        : { x: cursorLocal.x, y: cursorLocal.y - (dir || 1) * iconClearance };
     const labelPos = toLabelSpace(labelLocal.x, labelLocal.y);
     drawLabel(labelCtx, distText, labelPos.x, labelPos.y, "center");
 }

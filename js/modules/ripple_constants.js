@@ -27,8 +27,9 @@ export const COLORS = {
 
 export const DEFAULTS = {
     enabled: true,
-    safeZoneRadius: 10,     // graph-space units; radius of the "nothing happens yet" zone around origin
-    maxDistance: -1,        // graph-space units from the TRUE origin; -1 = infinite
+    safeZoneRadius: 10,     // display px; radius of the "nothing happens yet" zone around origin
+    safeZoneOrientationTimeoutMs: 150, // ms the cursor must be away from the exact origin before orientation locks in
+    maxDistance: 0,         // graph-space units from the TRUE origin; 0 (or any non-positive value) = infinite
     lineWidth: 5,           // px
     scrollStepPercent: 5,   // % per wheel notch, always relative to the current viewport dimension
     nodeInclusionMode: "clear", // "clear" | "touching" | "center"
@@ -36,11 +37,8 @@ export const DEFAULTS = {
     hideVisuals: false,
 
     pusherLineColor: "rgba(60, 220, 130, 0.95)",
-    pusherFillColor: "rgba(60, 220, 130, 0.16)",
     pullerLineColor: "rgba(230, 70, 70, 0.95)",
-    pullerFillColor: "rgba(230, 70, 70, 0.16)",
     alignerLineColor: "rgba(255, 170, 60, 0.95)",
-    alignerFillColor: "rgba(255, 170, 60, 0.10)",
 };
 
 export const NODE_INCLUSION_OPTIONS = [

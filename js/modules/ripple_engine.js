@@ -1,24 +1,36 @@
 /**
  * Orchestration: the perpendicular line-length filter, applying the ripple
  * to every node, and `tick()` - the per-frame function that handles the
- * safe zone, resets on any (axis, mode) change, and triggers a redraw.
+ * safe zone, resets on any (axis, mode, direction) change, and triggers a
+ * redraw.
  *
  * ---------------------------------------------------------------------------
- * WHAT THE SAFE ZONE IS FOR
+ * WHAT THE SAFE ZONE (AND THE ORIENTATION TIMER) ARE FOR
  * ---------------------------------------------------------------------------
  * A real mouse gesture rarely starts out moving in a perfectly straight
  * line - the first few pixels of a drag often "tremble" a little (e.g. the
  * overall motion is clearly rightward, but there's a stray pixel or two of
  * vertical drift right at the start). If orientation were picked from the
  * very first hint of movement, that tremble could just as easily pick the
- * wrong axis. The safe zone is a small dead zone around the origin, in
- * *screen* pixels (see below), where nothing happens yet and orientation
- * isn't committed to - it exists purely to give a real gesture enough room
- * to declare its actual direction before the tool acts on it. Once the
- * cursor clears it, the direction it cleared it in is trusted.
+ * wrong axis. Two independent safeguards exist against this:
+ *
+ *  - The safe zone (`RippleEdit.SafeZoneRadius`, display px): a small dead
+ *    zone around the origin. Nothing moves and orientation isn't committed
+ *    to while the cursor is inside it.
+ *  - The orientation timer (`RippleEdit.SafeZoneOrientationTimeoutMs`): even
+ *    once the cursor has cleared the safe zone, the tool stays visually
+ *    "disengaged" (greyed line, orientation still free to swap, nothing
+ *    moves) until this much time has passed since the cursor first moved
+ *    away from the *exact* origin point. This catches a fast tremble that's
+ *    already large enough to clear a small safe zone in a single event, by
+ *    also requiring a *moment* of continued movement before committing.
+ *
+ * Both must be satisfied (outside the safe zone AND the timer elapsed)
+ * before the tool is considered truly "engaged": orientation locks in, and
+ * nodes start actually moving.
  *
  * ---------------------------------------------------------------------------
- * WHY SCREEN PIXELS, NOT GRAPH UNITS
+ * WHY THE SAFE ZONE IS IN SCREEN PIXELS, NOT GRAPH UNITS
  * ---------------------------------------------------------------------------
  * A physical mouse tremble is a fixed number of *screen* pixels, regardless
  * of how far zoomed in the graph is - so the safe zone is measured and
@@ -42,10 +54,6 @@ import { redrawOverlays } from "./ripple_draw.js";
 // ---------------------------------------------------------------------------
 // Perpendicular line-length filter
 // ---------------------------------------------------------------------------
-// When the ripple line's remembered length is finite (rather than
-// "infinite"), only nodes whose bounding box actually falls within that
-// length (in the perpendicular dimension) are eligible for movement.
-// Returns [worldMin, worldMax] or null when the line is infinite (no filter).
 
 export function getPerpWorldRange(perpIdx) {
     const extentPx = getRememberedExtentPx();
@@ -56,6 +64,16 @@ export function getPerpWorldRange(perpIdx) {
     const endLocal = perpCenterLocal + extentPx / 2;
     const a = screenAxisToWorld(startLocal, perpIdx);
     const b = screenAxisToWorld(endLocal, perpIdx);
+    return [Math.min(a, b), Math.max(a, b)];
+}
+
+/** The visible workspace's world-space bounds along one axis, for the off-screen-affected-item count. */
+function getVisibleWorldRange(axisIdx) {
+    const rect = getCachedGraphCanvasRect();
+    if (!rect) return null;
+    const extent = axisIdx === 0 ? rect.width : rect.height;
+    const a = screenAxisToWorld(0, axisIdx);
+    const b = screenAxisToWorld(extent, axisIdx);
     return [Math.min(a, b), Math.max(a, b)];
 }
 
@@ -70,6 +88,7 @@ export function applyRipple() {
     const originCoord = axisIdx === 0 ? R.startWorld.x : R.startWorld.y;
     const rawCursorCoord = axisIdx === 0 ? R.lastWorld.x : R.lastWorld.y;
     const mode = R.currentMode;
+    // 0 (or any non-positive value) means "no limit" - see RippleEdit.MaxDistance.
     const maxDist = settings.maxDistance;
     const inclusion = settings.nodeInclusionMode;
     // The safe-zone radius is configured in display pixels; convert to
@@ -77,28 +96,24 @@ export function applyRipple() {
     const safeRadiusGraph = Math.max(0, settings.safeZoneRadius) / getScale();
 
     const perpRange = getPerpWorldRange(perpIdx);
-    // Hoisted out of the per-node loop below - it only depends on
-    // `perpRange`, not on any per-node data, so there's no reason to
-    // allocate a fresh closure for every single node/group/reroute.
     const perpTest = perpRange ? (x) => x >= perpRange[0] && x <= perpRange[1] : null;
 
     const rawDelta = rawCursorCoord - originCoord;
-    const rawDir = Math.sign(rawDelta);
+    // RippleEdit.SafeZoneLockOrientation, once a direction is established,
+    // freezes it (see tick()) - `R.forcedDir` carries that override in here.
+    // While forced, only the *magnitude* of displacement matters; the sign
+    // is pinned to whichever direction was locked in.
+    const naturalDir = Math.sign(rawDelta);
+    const rawDir = R.forcedDir !== null ? R.forcedDir : naturalDir;
 
-    // The safe-zone discount exists purely so the pusher/puller threshold -
-    // and the on-screen distance readout - feel continuous as you cross out
-    // of the safe zone; it's about *space*, not about a physical touch. The
-    // aligner is a direct physical interaction with the line's actual
-    // position, so it deliberately uses the raw, undiscounted cursor
-    // position instead - using the discounted one would mean the aligner
-    // only "reaches" a node once the line is `safeZoneRadius` worth of
-    // extra pixels *inside* it, which doesn't correspond to anything
-    // physical.
     let delta, dir, cursorCoord;
     if (mode === RIPPLE_MODE.ALIGNER) {
-        delta = rawDelta;
+        // The aligner is a direct physical interaction with the line's
+        // actual position - no safe-zone discount, that's a pusher/puller
+        // "space" concept.
+        delta = rawDir * Math.abs(rawDelta);
         dir = rawDir;
-        cursorCoord = rawCursorCoord;
+        cursorCoord = originCoord + delta;
     } else {
         dir = rawDir;
         delta = dir * Math.max(0, Math.abs(rawDelta) - safeRadiusGraph);
@@ -107,6 +122,10 @@ export function applyRipple() {
 
     R.displayDelta = delta;
     R.displayDir = dir;
+
+    const visibleRange = getVisibleWorldRange(axisIdx);
+    let offBefore = 0;
+    let offAfter = 0;
 
     for (const [node, orig] of R.trueOriginalPositions) {
         if (!node || !node.pos) continue;
@@ -122,21 +141,23 @@ export function applyRipple() {
         // line's finite length is a *release*: with the default "clear"
         // setting (both edges must be inside to count), applying that same
         // test to "is the node still fully within the line's reach" means
-        // the node is released the instant even a sliver of it isn't -
-        // which is what "clear" already means everywhere else, just
-        // visible here as an exit condition instead of an entry one.
+        // the node is released the instant even a sliver of it isn't.
         const wasCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
         if (wasCaptured && perpRange) {
             const stillIn = edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
-            if (!stillIn) R.captured.delete(node);
+            if (!stillIn) {
+                R.captured.delete(node);
+                if (R.captureDir) R.captureDir.delete(node);
+            }
         }
         const stillCaptured = mode !== RIPPLE_MODE.PUSHER && R.captured.has(node);
         const inPerp = stillCaptured || !perpRange || edgeIncluded(perpTest, perpC, perpC + perpH, inclusion);
 
         let shiftedCoord = c;
+        let affected = false;
         if (inPerp) {
             const distFromTrueOrigin = Math.abs(c - originCoord);
-            if (maxDist === -1 || distFromTrueOrigin <= maxDist) {
+            if (maxDist <= 0 || distFromTrueOrigin <= maxDist) {
                 if (mode === RIPPLE_MODE.ALIGNER) {
                     shiftedCoord = c + computeAlignerShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir);
                 } else if (mode === RIPPLE_MODE.PUSHER) {
@@ -144,6 +165,7 @@ export function applyRipple() {
                 } else if (mode === RIPPLE_MODE.PULLER) {
                     shiftedCoord = c + computePullShift(node, nodeMin, nodeMax, originCoord, cursorCoord, dir, delta, inclusion);
                 }
+                affected = shiftedCoord !== c;
             }
         }
 
@@ -162,7 +184,16 @@ export function applyRipple() {
         } else {
             node.pos = [orig.x, finalCoord];
         }
+
+        if (affected && visibleRange) {
+            const farEdge = finalCoord + w;
+            if (farEdge < visibleRange[0]) offBefore++;
+            else if (finalCoord > visibleRange[1]) offAfter++;
+        }
     }
+
+    R.displayOffscreenNodesBefore = offBefore;
+    R.displayOffscreenNodesAfter = offAfter;
 
     if (app.canvas && typeof app.canvas.setDirty === "function") {
         app.canvas.setDirty(true, true);
@@ -181,15 +212,14 @@ export function restoreTrueOriginalPositions() {
 }
 
 // ---------------------------------------------------------------------------
-// Per-frame orchestration: safe zone, reset-on-change, apply, redraw
+// Per-frame orchestration: safe zone, orientation timer, reset-on-change,
+// apply, redraw
 // ---------------------------------------------------------------------------
 
 export function tick(e) {
     if (!R.isDragging) return;
 
-    // One fresh canvas-rect read per frame, shared by everything below
-    // (position conversion, the perpendicular filter, resizing the overlay
-    // canvases) rather than each of those independently forcing a reflow.
+    // One fresh canvas-rect read per frame, shared by everything below.
     invalidateCanvasRectCache();
     if (!getCachedGraphCanvasRect()) return;
 
@@ -200,26 +230,38 @@ export function tick(e) {
     }
     if (!R.lastWorld || !R.lastLocal || !R.startLocal) return;
 
-    // Safe-zone membership is decided in screen pixels (see the module
-    // header comment for why), independent of zoom.
     const distScreen = Math.hypot(R.lastLocal.x - R.startLocal.x, R.lastLocal.y - R.startLocal.y);
     const safeRadiusPx = Math.max(0, settings.safeZoneRadius);
-    let inSafeZone = distScreen <= safeRadiusPx;
+    const inSafeZone = distScreen <= safeRadiusPx;
+    const atExactOrigin = distScreen === 0;
 
-    // While anything is magnetically stuck to the aligner, the safe zone is
-    // bypassed entirely - stuck nodes keep following the line exactly as
-    // normal, and orientation stays locked, even if the cursor dips back
-    // near the origin. Disengaging (which would restore everything to its
-    // original position) makes no sense while something is still attached.
+    // Orientation-decision timer (see the module header for why this exists
+    // alongside the safe zone).
+    if (atExactOrigin) {
+        R.awayFromOriginSince = null;
+    } else if (R.awayFromOriginSince === null) {
+        R.awayFromOriginSince = Date.now();
+    }
+    const timeoutMs = Math.max(0, settings.safeZoneOrientationTimeoutMs);
+    const timeoutElapsed = R.awayFromOriginSince !== null && Date.now() - R.awayFromOriginSince >= timeoutMs;
+
+    // "Disengaged": nodes don't move and the line is greyed, whether because
+    // we're spatially in the safe zone or because the timer hasn't elapsed.
+    let disengaged = inSafeZone || !timeoutElapsed;
+
+    // While anything is magnetically stuck to the aligner, both safeguards
+    // are bypassed entirely - disengaging would restore everything to its
+    // original position, which makes no physical sense for something
+    // magnetically attached, and orientation stays locked too (below).
     const alignerHasStuckNodes = R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0;
-    if (alignerHasStuckNodes) inSafeZone = false;
+    if (alignerHasStuckNodes) disengaged = false;
 
     const dxTrue = R.lastWorld.x - R.startWorld.x;
     const dyTrue = R.lastWorld.y - R.startWorld.y;
     const dominant = () => (Math.abs(dxTrue) >= Math.abs(dyTrue) ? "x" : "y");
 
     let liveAxis;
-    if (!inSafeZone) {
+    if (!disengaged) {
         if (settings.lockOrientationOutsideSafeZone && R.engagedAxis !== null) {
             liveAxis = R.engagedAxis; // locked - ignore further orientation changes this drag
         } else {
@@ -227,53 +269,92 @@ export function tick(e) {
             R.engagedAxis = liveAxis;
         }
     } else if (R.engagedAxis !== null) {
-        liveAxis = R.engagedAxis; // frozen orientation while back inside the safe zone
+        liveAxis = R.engagedAxis; // frozen orientation while disengaged
     } else {
         liveAxis = dominant(); // never engaged yet - provisional, display-only
     }
 
-    // While the aligner has anything stuck to it, orientation can't change
-    // at all - not even while re-passing through the safe zone (handled
-    // above by bypassing the safe zone outright) - since swapping axis with
-    // nodes attached has no sensible physical meaning for a "stuck to a
-    // stick" gesture. This is unconditional, independent of
-    // RippleEdit.SafeZoneLockOrientation (which only governs the normal,
-    // nothing-stuck case above).
+    // Aligner stickiness overrides everything above: axis can't change at
+    // all while something is attached, unconditionally.
     if (alignerHasStuckNodes) {
         liveAxis = R.currentAxis;
     }
 
+    // Direction locking: with RippleEdit.SafeZoneLockOrientation on, once a
+    // real direction has been established it's frozen for the rest of the
+    // drag too - not just the axis. While frozen, only the *magnitude* of
+    // displacement from the origin matters; the literal screen direction
+    // that produced it doesn't.
+    let forcedDir = null;
+    if (settings.lockOrientationOutsideSafeZone) {
+        if (!disengaged) {
+            const axisIdxNow = liveAxis === "x" ? 0 : 1;
+            const rawNow = Math.sign(axisIdxNow === 0 ? dxTrue : dyTrue);
+            if (R.engagedDir === null && rawNow !== 0) {
+                R.engagedDir = rawNow;
+            }
+        }
+        forcedDir = R.engagedDir;
+    } else {
+        R.engagedDir = null;
+    }
+    R.forcedDir = forcedDir;
+
     const mode = currentModeFromEvent(e);
 
-    // The icon/line should keep pointing the right way even while inside
-    // the safe zone (disengaged) - only the *magnitude* (and therefore any
-    // actual node movement) is held at zero there, not the direction.
+    // Icon/line direction keeps live-updating even while disengaged - only
+    // the magnitude (and therefore any actual node movement) is held at
+    // zero there, not the direction.
     const liveAxisIdx = liveAxis === "x" ? 0 : 1;
     const liveRawDelta = liveAxisIdx === 0 ? dxTrue : dyTrue;
-    R.displayDir = Math.sign(liveRawDelta);
+    R.displayDir = forcedDir !== null ? forcedDir : Math.sign(liveRawDelta);
 
-    if (inSafeZone) {
+    if (disengaged) {
         restoreTrueOriginalPositions();
         R.currentAxis = null;
         R.currentMode = null;
+        R.currentDir = null;
         R.captured = null;
+        R.captureDir = null;
         R.displayDelta = 0;
+        R.displayOffscreenNodesBefore = 0;
+        R.displayOffscreenNodesAfter = 0;
     } else {
-        const changed = R.currentAxis !== liveAxis || R.currentMode !== mode;
+        const axisIdxNow = liveAxis === "x" ? 0 : 1;
+        const rawDeltaNow = axisIdxNow === 0 ? dxTrue : dyTrue;
+        const rawDirNow = Math.sign(rawDeltaNow);
+
+        // A direction reversal *within the same (axis, mode) run* only
+        // needs special handling for the puller - see the note in
+        // ripple_math.js for why the pusher and aligner don't need this.
+        // Locked direction (forcedDir set) can't flip by construction, so
+        // this never fires while locked.
+        let dirFlipped = false;
+        if (mode === RIPPLE_MODE.PULLER && forcedDir === null && R.currentDir !== null && R.currentDir !== 0 && rawDirNow !== 0) {
+            dirFlipped = rawDirNow !== R.currentDir;
+        }
+
+        const changed = R.currentAxis !== liveAxis || R.currentMode !== mode || dirFlipped;
         if (changed) {
             // No more continuing seamlessly into a new mode/orientation -
             // everything moved so far in this run reverts first.
             restoreTrueOriginalPositions();
             R.captured = new Set();
+            R.captureDir = new Map();
             R.currentAxis = liveAxis;
             R.currentMode = mode;
+            R.currentDir = rawDirNow !== 0 ? rawDirNow : null;
+        } else if (R.currentDir === null && rawDirNow !== 0) {
+            R.currentDir = rawDirNow;
         }
-        applyRipple(); // also refines R.displayDir/R.displayDelta using the safe-zone-discounted math
+        applyRipple();
     }
 
     R.displayAxis = liveAxis;
     R.displayMode = mode;
     R.displayInSafeZone = inSafeZone;
+    R.displayDisengaged = disengaged;
+    R.displayAtExactOrigin = atExactOrigin;
 
     redrawOverlays();
 }
