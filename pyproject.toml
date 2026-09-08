@@ -31,7 +31,7 @@ Documentation	= "https://github.com/geroldmeisinger/ripple-edit-comfyui"
 [tool.comfy]
 PublisherId	= "geroldmeisinger"
 DisplayName	= "Ripple Edit"
-Icon	= "https://raw.githubusercontent.com/geroldmeisinger/ComfyUI-outputlists-combiner/refs/heads/main/logo.png"
+Icon	= "https://raw.githubusercontent.com/geroldmeisinger/ripple-edit-comfyui/refs/heads/main/logo.png"
 Tags	= []
 Repository	= "https://github.com/geroldmeisinger/ripple-edit-comfyui"
 includes	= []
@@ -60,7 +60,7 @@ disable_error_code	= "attr-defined"
 [tool.ruff]
 # extend-exclude	= ["static", "ci/templates"]
 line-length	= 140
-src	= ["src", "tests"]
+src	= ["src, "tests"]
 target-version	= "py39"
 
 # Add rules to ban exec/eval
