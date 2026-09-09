@@ -68,61 +68,68 @@ function drawOriginMarker(ctx, originLocal, mode) {
 }
 
 /**
- * Draws the ripple line as a filled, edge-aligned rectangle: the forward
- * edge (in the direction of travel) sits exactly at `cursorLocal`, and the
- * full thickness extends backward from there - nothing is ever drawn past
- * the cursor. An infinite line is drawn at double the viewport dimension,
- * centered on the cursor, so it always reaches both edges regardless of
- * where the cursor currently is. Returns segment info used by the affected-
- * area indicators and the overflow label. There is no filled "affected
- * space" rectangle anymore - see `drawAffectedAreaIndicators`.
+ * Pure geometry for the ripple line's perpendicular segment - shared by the
+ * line itself and the affected-area indicators, computed once per frame so
+ * both agree exactly (this used to be computed only inside `drawRippleLine`,
+ * which meant anything wanting it earlier - like the pre-engagement
+ * MaxDistance preview - couldn't get consistent values).
  */
-function drawRippleLine(ctx, rect, color, axisIsX, dir, cursorLocal) {
+function computeSegmentBounds(rect, axisIsX, perpCenter) {
     const viewportExtent = axisIsX ? rect.height : rect.width;
-    const perpCenter = axisIsX ? cursorLocal.y : cursorLocal.x;
-
     const extentPx = getRememberedExtentPx();
     const segLen = extentPx === null ? viewportExtent * 2 : extentPx;
     const segStart = perpCenter - segLen / 2;
     const segEnd = perpCenter + segLen / 2;
-    const clippedStart = Math.max(0, segStart);
-    const clippedEnd = Math.min(viewportExtent, segEnd);
-
-    const lw = Math.max(1, settings.lineWidth);
-    ctx.save();
-    ctx.fillStyle = color;
-    if (axisIsX) {
-        const x0 = dir >= 0 ? cursorLocal.x - lw : cursorLocal.x;
-        ctx.fillRect(x0, clippedStart, lw, clippedEnd - clippedStart);
-    } else {
-        const y0 = dir >= 0 ? cursorLocal.y - lw : cursorLocal.y;
-        ctx.fillRect(clippedStart, y0, clippedEnd - clippedStart, lw);
-    }
-    ctx.restore();
-
     return {
         isInfinite: extentPx === null,
         viewportExtent,
-        segStart: clippedStart,
-        segEnd: clippedEnd,
+        rawSegStart: segStart,
+        rawSegEnd: segEnd,
+        segStart: Math.max(0, segStart),
+        segEnd: Math.min(viewportExtent, segEnd),
         overflowStart: Math.max(0, -segStart),
         overflowEnd: Math.max(0, segEnd - viewportExtent),
     };
 }
 
 /**
+ * Draws the ripple line as a filled, edge-aligned rectangle: the forward
+ * edge (in the direction of travel) sits exactly at `cursorLocal`, and the
+ * full thickness extends backward from there - nothing is ever drawn past
+ * the cursor. Set `RippleEdit.LineWidth` to 0 to skip drawing it entirely
+ * (the segment geometry is still returned/used for everything else).
+ */
+function drawRippleLine(ctx, color, axisIsX, dir, cursorLocal, segInfo) {
+    const lw = Math.max(0, settings.lineWidth);
+    if (lw <= 0) return;
+    ctx.save();
+    ctx.fillStyle = color;
+    if (axisIsX) {
+        const x0 = dir >= 0 ? cursorLocal.x - lw : cursorLocal.x;
+        ctx.fillRect(x0, segInfo.segStart, lw, segInfo.segEnd - segInfo.segStart);
+    } else {
+        const y0 = dir >= 0 ? cursorLocal.y - lw : cursorLocal.y;
+        ctx.fillRect(segInfo.segStart, y0, segInfo.segEnd - segInfo.segStart, lw);
+    }
+    ctx.restore();
+}
+
+/**
  * Marks the extent of the affected area (pusher/puller only - the aligner
  * has no "space" concept): a faint dotted line at each perpendicular end of
  * the visible line segment, running orthogonal to the ripple line (i.e.
- * along the drag axis), starting at the tool line's current position and
- * extending further in the direction of travel out to
- * `RippleEdit.MaxDistance`'s cutoff point - a preview of how much further
- * could still be affected. Only drawn when MaxDistance is finite; there's
- * no fixed endpoint to show otherwise.
+ * along the drag axis), starting at `fromLocal` and extending to
+ * `toLocal` - a preview of how much could be (or could still be) affected
+ * out to `RippleEdit.MaxDistance`'s cutoff. Only drawn when MaxDistance is
+ * finite; there's no fixed endpoint to show otherwise. Called twice: once
+ * for the current direction of travel (in the mode's color, from the
+ * cursor), and once for the opposite direction (always grey, from the
+ * origin) - drawing both is what fixes an old asymmetry where only
+ * whichever side happened to have a line looked "on".
  */
-function drawAffectedAreaIndicators(ctx, axisIsX, color, cursorLocal, boundaryLocal, segStart, segEnd) {
-    const along0 = Math.min(cursorLocal[axisIsX ? "x" : "y"], boundaryLocal[axisIsX ? "x" : "y"]);
-    const along1 = Math.max(cursorLocal[axisIsX ? "x" : "y"], boundaryLocal[axisIsX ? "x" : "y"]);
+function drawAffectedAreaIndicators(ctx, axisIsX, color, fromLocal, toLocal, segStart, segEnd) {
+    const along0 = Math.min(fromLocal[axisIsX ? "x" : "y"], toLocal[axisIsX ? "x" : "y"]);
+    const along1 = Math.max(fromLocal[axisIsX ? "x" : "y"], toLocal[axisIsX ? "x" : "y"]);
 
     ctx.save();
     ctx.strokeStyle = color;
@@ -144,7 +151,7 @@ function drawAffectedAreaIndicators(ctx, axisIsX, color, cursorLocal, boundaryLo
     ctx.restore();
 }
 
-/** A dotted blue outline at an item's *original* position and size - a "ghost" of the pre-drag layout, for whatever is currently affected. */
+/** A dotted blue outline at an item's *original* position and size (title bar included for nodes) - a "ghost" of the pre-drag layout, for whatever is currently affected. */
 function drawGhostRect(ctx, topLeftLocal, bottomRightLocal) {
     ctx.save();
     ctx.strokeStyle = COLORS.ghost;
@@ -289,7 +296,8 @@ export function redrawOverlays() {
 
     // Before ever engaging (leaving the safe zone) at least once this drag,
     // we don't know the eventual orientation/effect yet, so only the icon
-    // is shown - no line, no distance info. Once engaged at least once,
+    // (and, if MaxDistance is finite, the two direction previews below) are
+    // shown - no line, no distance info. Once engaged at least once,
     // returning to the safe zone shows the line again, greyed. The icon
     // itself is never drawn while the cursor is exactly at the origin - the
     // direction is undefined there.
@@ -298,12 +306,31 @@ export function redrawOverlays() {
     if (!R.displayAtExactOrigin) {
         drawModeIcon(overlayCtx, mode, axisIsX, dir, cursorLocal, drawColor);
     }
+
+    const perpCenter = axisIsX ? cursorLocal.y : cursorLocal.x;
+    const segInfo = computeSegmentBounds(rect, axisIsX, perpCenter);
+
+    // MaxDistance previews, in both directions - drawable even before ever
+    // engaging, as soon as a (possibly provisional) orientation is known.
+    // The current direction of travel uses the same color as the line
+    // (grey while disengaged, the mode's color once engaged); the opposite
+    // direction is always grey, since that side is never actually active.
+    if (mode !== RIPPLE_MODE.ALIGNER && settings.maxDistance > 0) {
+        const towardWorld = axisIsX
+            ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
+            : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
+        const awayWorld = axisIsX
+            ? { x: R.startWorld.x - settings.maxDistance * (dir || 1), y: R.startWorld.y }
+            : { x: R.startWorld.x, y: R.startWorld.y - settings.maxDistance * (dir || 1) };
+        const towardLocal = worldToCanvasLocal(towardWorld.x, towardWorld.y);
+        const awayLocal = worldToCanvasLocal(awayWorld.x, awayWorld.y);
+        drawAffectedAreaIndicators(overlayCtx, axisIsX, drawColor, cursorLocal, towardLocal, segInfo.segStart, segInfo.segEnd);
+        drawAffectedAreaIndicators(overlayCtx, axisIsX, COLORS.disengaged.line, originLocal, awayLocal, segInfo.segStart, segInfo.segEnd);
+    }
+
     if (neverLeftSafeZoneYet) return;
 
-    // The outer edge of the safe-zone circle, in the current direction of
-    // travel - the distance indicator and affected-area markers start here,
-    // not at the origin's exact center.
-    const segInfo = drawRippleLine(overlayCtx, rect, drawColor, axisIsX, dir, cursorLocal);
+    drawRippleLine(overlayCtx, drawColor, axisIsX, dir, cursorLocal, segInfo);
 
     // The outer edge of the safe-zone circle, in the current direction of
     // travel - the distance indicator starts here, not at the origin's
@@ -314,21 +341,15 @@ export function redrawOverlays() {
         : { x: R.startWorld.x, y: R.startWorld.y + safeRadiusGraph * (dir || 1) };
     const safeZoneEdgeLocal = worldToCanvasLocal(safeZoneEdgeWorld.x, safeZoneEdgeWorld.y);
 
-    if (mode !== RIPPLE_MODE.ALIGNER && settings.maxDistance > 0) {
-        const boundaryWorld = axisIsX
-            ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
-            : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
-        const boundaryLocal = worldToCanvasLocal(boundaryWorld.x, boundaryWorld.y);
-        drawAffectedAreaIndicators(overlayCtx, axisIsX, drawColor, cursorLocal, boundaryLocal, segInfo.segStart, segInfo.segEnd);
-    }
-
     // Ghost outlines of whatever is actually affected right now, at its
-    // *original* (pre-drag) position and size.
+    // *original* (pre-drag) position and size - including the title bar
+    // for nodes, matching the title-height-aware bounding box used to
+    // decide what's affected in the first place.
     if (R.currentlyAffected && R.currentlyAffected.size > 0 && R.trueOriginalPositions) {
         for (const item of R.currentlyAffected) {
             const orig = R.trueOriginalPositions.get(item);
             if (!orig || !item.size) continue;
-            const topLeft = worldToCanvasLocal(orig.x, orig.y);
+            const topLeft = worldToCanvasLocal(orig.x, orig.y - (orig.titleHeight || 0));
             const bottomRight = worldToCanvasLocal(orig.x + item.size[0], orig.y + item.size[1]);
             drawGhostRect(overlayCtx, topLeft, bottomRight);
         }

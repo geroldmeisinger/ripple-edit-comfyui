@@ -134,7 +134,9 @@ export function applyRipple() {
     // Both fall out of the same edgeIncluded() combinator already used
     // elsewhere, applied to a one-sided "how far past origin, in the
     // direction of travel" test instead of the old single-point check.
-    const maxDistTest = maxDist > 0 ? (x) => (x - originCoord) * dir <= maxDist : null;
+    // Doesn't apply to the aligner at all - "how far can this reach" isn't
+    // a meaningful concept for a direct physical touch.
+    const maxDistTest = mode !== RIPPLE_MODE.ALIGNER && maxDist > 0 ? (x) => (x - originCoord) * dir <= maxDist : null;
 
     const visibleRange = getVisibleWorldRange(axisIdx);
     let offBefore = 0;
@@ -143,13 +145,25 @@ export function applyRipple() {
 
     for (const [node, orig] of R.trueOriginalPositions) {
         if (!node || !node.pos) continue;
-        const c = axisIdx === 0 ? orig.x : orig.y;
-        const w = node.size ? node.size[axisIdx] : 0;
+
+        // LiteGraph draws a node's title bar *above* `pos` - `pos`/`size`
+        // only describe the body. All eligibility/shift math below happens
+        // in this "visual" coordinate space (title included) so a node's
+        // actual on-screen extent is what's being tested against, not just
+        // its body; the title-height offset is added back once, right when
+        // computing the final real position to write to `node.pos`. Groups
+        // and reroutes carry `titleHeight: 0`, so this is a no-op for them.
+        const titleAdj = axisIdx === 1 ? orig.titleHeight || 0 : 0;
+        const realC = axisIdx === 0 ? orig.x : orig.y;
+        const c = realC - titleAdj;
+        const w = (node.size ? node.size[axisIdx] : 0) + titleAdj;
         const nodeMin = c;
         const nodeMax = c + w;
 
-        const perpC = perpIdx === 0 ? orig.x : orig.y;
-        const perpH = node.size ? node.size[perpIdx] : 0;
+        const perpTitleAdj = perpIdx === 1 ? orig.titleHeight || 0 : 0;
+        const realPerpC = perpIdx === 0 ? orig.x : orig.y;
+        const perpC = realPerpC - perpTitleAdj;
+        const perpH = (node.size ? node.size[perpIdx] : 0) + perpTitleAdj;
 
         // Being "stuck" to the puller/aligner and later falling outside the
         // line's finite length is a *release*: with the default "clear"
@@ -182,7 +196,7 @@ export function applyRipple() {
         }
         if (affected) R.currentlyAffected.add(node);
 
-        const finalCoord = snapValue(shiftedCoord);
+        const finalCoord = snapValue(shiftedCoord + titleAdj); // back to real (body) coordinate space before snapping
         // Whole-array assignment (`node.pos = [x, y]`), never indexed
         // (`node.pos[0] = x`). LiteGraph's `pos` is a getter/setter pair;
         // the indexed form mutates the underlying array directly, which the
@@ -199,7 +213,7 @@ export function applyRipple() {
         }
 
         if (affected && visibleRange) {
-            const farEdge = finalCoord + w;
+            const farEdge = finalCoord + (node.size ? node.size[axisIdx] : 0);
             if (farEdge < visibleRange[0]) offBefore++;
             else if (finalCoord > visibleRange[1]) offAfter++;
         }
@@ -262,16 +276,11 @@ export function tick(e) {
     // we're spatially in the safe zone or because the timer hasn't elapsed.
     let disengaged = inSafeZone || !timeoutElapsed;
 
-    // While anything is magnetically stuck to the aligner, both safeguards
-    // are bypassed entirely - disengaging would restore everything to its
-    // original position, which makes no physical sense for something
-    // magnetically attached, and orientation stays locked too (below).
-    const alignerHasStuckNodes = R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0;
-    if (alignerHasStuckNodes) disengaged = false;
-
     // Mode is decided purely from the event's modifier keys, so it's safe
     // to compute this early and use it below.
     const mode = currentModeFromEvent(e);
+
+    const alignerHasStuckNodes = R.currentMode === RIPPLE_MODE.ALIGNER && R.captured && R.captured.size > 0;
 
     const dxTrue = R.lastWorld.x - R.startWorld.x;
     const dyTrue = R.lastWorld.y - R.startWorld.y;
@@ -318,22 +327,23 @@ export function tick(e) {
     }
     R.forcedDir = forcedDir;
 
-    // Direction-locked "dead zone": once a direction is locked in and the
-    // cursor is confirmed on the *wrong* side of the origin (outside the
-    // safe zone, in the opposite direction from the locked one), the tool
-    // stops doing anything at all for pusher/puller - not just while on
-    // that side, but for the rest of this drag, since the direction can't
-    // change to correct for it. The aligner is exempt: nodes stuck to it
-    // have to be able to follow it back across the origin (see
-    // computeAlignerShift/applyRipple), so there's no "wrong side" for it.
+    // Direction-locked "dead zone": once a direction is locked in, moving
+    // to the *wrong* side of the origin (outside the safe zone, in the
+    // opposite direction from the locked one) makes the tool do nothing at
+    // all for pusher/puller - everything reverts to its original position.
+    // This is evaluated fresh every frame (not "sticky"): returning to the
+    // originally-locked side resumes normally, since the direction itself
+    // never actually changed, only which side of it you're currently on.
+    // The aligner is exempt: nodes stuck to it have to be able to follow it
+    // back across the origin (see computeAlignerShift/applyRipple), so
+    // there's no "wrong side" for it.
     if (mode !== RIPPLE_MODE.ALIGNER && forcedDir !== null && !inSafeZone) {
         const axisIdxNow = liveAxis === "x" ? 0 : 1;
         const rawNow = Math.sign(axisIdxNow === 0 ? dxTrue : dyTrue);
         if (rawNow !== 0 && rawNow !== forcedDir) {
-            R.deadZoneTriggered = true;
+            disengaged = true;
         }
     }
-    if (R.deadZoneTriggered) disengaged = true;
 
     // Icon/line direction keeps live-updating even while disengaged - only
     // the magnitude (and therefore any actual node movement) is held at
@@ -344,11 +354,21 @@ export function tick(e) {
 
     if (disengaged) {
         restoreTrueOriginalPositions();
-        R.currentAxis = null;
-        R.currentMode = null;
-        R.currentDir = null;
-        R.captured = null;
-        R.captureDir = null;
+        // The aligner is a special case: if anything is currently stuck to
+        // it, dipping through the safe zone only *visually* disengages
+        // (positions revert, line greys out) - the underlying "what's
+        // stuck, and which of its edges" bookkeeping is preserved, so that
+        // leaving the safe zone again immediately resumes moving those same
+        // items, rather than requiring them to be re-touched from scratch.
+        // Pusher/puller (and an aligner with nothing currently stuck) get a
+        // full reset instead, same as before.
+        if (!alignerHasStuckNodes) {
+            R.currentAxis = null;
+            R.currentMode = null;
+            R.currentDir = null;
+            R.captured = null;
+            R.captureDir = null;
+        }
         R.displayDelta = 0;
         R.displayOffscreenNodesBefore = 0;
         R.displayOffscreenNodesAfter = 0;

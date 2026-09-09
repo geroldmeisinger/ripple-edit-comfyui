@@ -42,7 +42,7 @@ export function registerSettings() {
     add("RippleEdit.SafeZoneOrientationTimeoutMs", "Ripple Edit: Safe zone - time cursor must be away from origin before orientation locks in (ms)", "number", DEFAULTS.safeZoneOrientationTimeoutMs, "safeZoneOrientationTimeoutMs", { attrs: { min: 0 } });
     add("RippleEdit.SafeZoneLockOrientation", "Ripple Edit: Safe zone - lock orientation AND direction once engaged (no changes at all for the rest of the drag)", "boolean", DEFAULTS.lockOrientationOutsideSafeZone, "lockOrientationOutsideSafeZone");
     add("RippleEdit.MaxDistance", "Ripple Edit: Maximum node distance from origin affected, 0 = infinite (graph units)", "number", DEFAULTS.maxDistance, "maxDistance", { attrs: { min: 0 } });
-    add("RippleEdit.LineWidth", "Ripple Edit: Ripple line thickness (px)", "number", DEFAULTS.lineWidth, "lineWidth", { attrs: { min: 1 } });
+    add("RippleEdit.LineWidth", "Ripple Edit: Ripple line thickness (px), 0 = don't draw the line", "number", DEFAULTS.lineWidth, "lineWidth", { attrs: { min: 0 } });
     add("RippleEdit.ScrollStepPercent", "Ripple Edit: Scroll-wheel resize step (% of current viewport dimension)", "number", DEFAULTS.scrollStepPercent, "scrollStepPercent", { attrs: { min: 1, max: 100 } });
     add(
         "RippleEdit.NodeInclusionMode",

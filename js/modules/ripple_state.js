@@ -45,7 +45,6 @@ export const R = {
     // direction has been established, that direction (not just the axis)
     // is frozen for the rest of the drag.
     engagedDir: null,          // signed 1/-1 | null
-    deadZoneTriggered: null,   // once true (pusher/puller only, direction-locked), stays true for the rest of the drag - see ripple_engine.js
 
     // The 150ms-by-default orientation-decision timer (RippleEdit.SafeZoneOrientationTimeoutMs).
     // Resets to "not started" whenever the cursor is exactly back at the
@@ -81,7 +80,6 @@ export function resetDragState() {
     R.captured = null;
     R.captureDir = null;
     R.engagedDir = null;
-    R.deadZoneTriggered = null;
     R.awayFromOriginSince = null;
     R.displayAxis = null;
     R.displayMode = RIPPLE_MODE.PUSHER;
@@ -101,11 +99,29 @@ export function currentModeFromEvent(e) {
     return RIPPLE_MODE.PUSHER;
 }
 
-export function snapshotPositions(nodes) {
+/**
+ * LiteGraph draws a node's title bar *above* `pos` - `pos`/`size` only
+ * describe the body. For any Y-axis math (vertical drag, or the
+ * perpendicular extent during a horizontal drag) that omits this, a node's
+ * actual on-screen top edge is wrong by a full title bar's height. Groups
+ * and reroutes have no title bar, so they get 0.
+ */
+function getNodeTitleHeight(node) {
+    try {
+        if (node.flags && node.flags.collapsed) return 0;
+        if (typeof node.title_height === "number") return node.title_height;
+        if (window.LiteGraph && typeof LiteGraph.NODE_TITLE_HEIGHT === "number") return LiteGraph.NODE_TITLE_HEIGHT;
+    } catch (err) {
+        /* fall through */
+    }
+    return 30; // LiteGraph's long-standing default
+}
+
+export function snapshotPositions(items) {
     const m = new Map();
-    for (const node of nodes) {
-        if (!node || !node.pos) continue;
-        m.set(node, { x: node.pos[0], y: node.pos[1] });
+    for (const { obj, titleHeight } of items) {
+        if (!obj || !obj.pos) continue;
+        m.set(obj, { x: obj.pos[0], y: obj.pos[1], titleHeight });
     }
     return m;
 }
@@ -119,6 +135,8 @@ export function snapshotPositions(nodes) {
  * rather than throwing. All three are later treated uniformly: reroutes
  * have no `.size`, which the existing "treat missing size as a 0-width
  * point" handling in ripple_engine.js already covers with no extra code.
+ * Each entry also carries its title-bar height (0 for groups/reroutes),
+ * used to correct the Y-axis bounding box everywhere it matters.
  */
 export function getAllMovableObjects() {
     const items = [];
@@ -126,11 +144,11 @@ export function getAllMovableObjects() {
     if (!graph) return items;
 
     const nodes = graph._nodes || [];
-    for (const n of nodes) if (n && n.pos) items.push(n);
+    for (const n of nodes) if (n && n.pos) items.push({ obj: n, titleHeight: getNodeTitleHeight(n) });
 
     try {
         const groups = graph._groups || graph.groups || [];
-        for (const g of groups) if (g && g.pos) items.push(g);
+        for (const g of groups) if (g && g.pos) items.push({ obj: g, titleHeight: 0 });
     } catch (err) {
         /* group collection shape differs on this version - skip */
     }
@@ -139,7 +157,7 @@ export function getAllMovableObjects() {
         const reroutesRaw = graph.reroutes;
         if (reroutesRaw) {
             const list = reroutesRaw instanceof Map ? [...reroutesRaw.values()] : Object.values(reroutesRaw);
-            for (const r of list) if (r && r.pos) items.push(r);
+            for (const r of list) if (r && r.pos) items.push({ obj: r, titleHeight: 0 });
         }
     } catch (err) {
         /* reroute collection shape differs on this version - skip */
