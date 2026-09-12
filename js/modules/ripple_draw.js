@@ -151,6 +151,36 @@ function drawAffectedAreaIndicators(ctx, axisIsX, color, fromLocal, toLocal, seg
     ctx.restore();
 }
 
+/**
+ * The orthogonal cap at the MaxDistance cutoff itself: a dashed segment
+ * perpendicular to the drag axis, positioned at `atLocal`'s along-axis
+ * coordinate (i.e. exactly at the cutoff point) and spanning the same
+ * `segStart..segEnd` range as the runner lines from
+ * `drawAffectedAreaIndicators`, so the two together read as one open-ended
+ * bracket: [ runner ][ runner ] with this cap closing the far end. Drawn
+ * unconditionally, every frame, for both directions - there is no
+ * direction-dependent branching here on purpose, since that's what
+ * previously made the cap (and, before this fix, the whole indicator)
+ * appear to only "pick one side" depending on which way the cursor moved.
+ */
+function drawMaxDistanceCap(ctx, axisIsX, color, atLocal, segStart, segEnd) {
+    const alongCoord = atLocal[axisIsX ? "x" : "y"];
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    if (axisIsX) {
+        ctx.moveTo(alongCoord, segStart);
+        ctx.lineTo(alongCoord, segEnd);
+    } else {
+        ctx.moveTo(segStart, alongCoord);
+        ctx.lineTo(segEnd, alongCoord);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
 /** A dotted blue outline at an item's *original* position and size (title bar included for nodes) - a "ghost" of the pre-drag layout, for whatever is currently affected. */
 function drawGhostRect(ctx, topLeftLocal, bottomRightLocal) {
     ctx.save();
@@ -325,7 +355,9 @@ export function redrawOverlays() {
         const towardLocal = worldToCanvasLocal(towardWorld.x, towardWorld.y);
         const awayLocal = worldToCanvasLocal(awayWorld.x, awayWorld.y);
         drawAffectedAreaIndicators(overlayCtx, axisIsX, drawColor, cursorLocal, towardLocal, segInfo.segStart, segInfo.segEnd);
+        drawMaxDistanceCap(overlayCtx, axisIsX, drawColor, towardLocal, segInfo.segStart, segInfo.segEnd);
         drawAffectedAreaIndicators(overlayCtx, axisIsX, COLORS.disengaged.line, originLocal, awayLocal, segInfo.segStart, segInfo.segEnd);
+        drawMaxDistanceCap(overlayCtx, axisIsX, COLORS.disengaged.line, awayLocal, segInfo.segStart, segInfo.segEnd);
     }
 
     if (neverLeftSafeZoneYet) return;

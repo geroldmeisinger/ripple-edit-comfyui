@@ -140,7 +140,15 @@ export function snapshotPositions(items) {
  */
 export function getAllMovableObjects() {
     const items = [];
-    const graph = app.graph;
+    // `app.graph` is always the ROOT graph - if the person has navigated
+    // into a subgraph, that's not what they're looking at or dragging
+    // across. `app.canvas.graph` is whatever graph the canvas is actually
+    // rendering right now (root or nested), which is the one whose node
+    // positions correspond 1:1 with the canvas's own pan/zoom state
+    // (`app.canvas.ds`) that the rest of this tool's coordinate math
+    // already assumes. Falling back to `app.graph` only covers the
+    // (defensive) case where `app.canvas.graph` isn't populated yet.
+    const graph = app.canvas?.graph || app.graph;
     if (!graph) return items;
 
     const nodes = graph._nodes || [];
@@ -161,6 +169,31 @@ export function getAllMovableObjects() {
         }
     } catch (err) {
         /* reroute collection shape differs on this version - skip */
+    }
+
+    // A subgraph's own boundary "Inputs"/"Outputs" pseudo-nodes (drawn
+    // pinned at the left/right edges when you're inside a subgraph) aren't
+    // part of `graph._nodes` - LiteGraph tracks them separately on the
+    // (sub)graph object itself. They still have `.pos`/`.size` like a real
+    // node, so once found they're treated identically to everything else
+    // here. Property name is read defensively and probed across the few
+    // shapes seen in the wild, same spirit as groups/reroutes above -
+    // if none match on a given LiteGraph/ComfyUI version, this is a no-op
+    // rather than a throw. If nodes still don't move on your version, log
+    // `Object.keys(app.canvas.graph)` while inside a subgraph to find the
+    // right property and extend this list.
+    try {
+        const candidates = [
+            graph.inputNode,
+            graph.outputNode,
+            graph._subgraph_io_input,
+            graph._subgraph_io_output,
+            graph.subgraphInput,
+            graph.subgraphOutput,
+        ];
+        for (const n of candidates) if (n && n.pos) items.push({ obj: n, titleHeight: 0 });
+    } catch (err) {
+        /* subgraph IO node shape differs on this version - skip */
     }
 
     return items;
