@@ -115,17 +115,16 @@ function drawRippleLine(ctx, color, axisIsX, dir, cursorLocal, segInfo) {
 }
 
 /**
- * Marks the extent of the affected area (pusher/puller only - the aligner
- * has no "space" concept): a faint dotted line at each perpendicular end of
- * the visible line segment, running orthogonal to the ripple line (i.e.
- * along the drag axis), starting at `fromLocal` and extending to
- * `toLocal` - a preview of how much could be (or could still be) affected
- * out to `RippleEdit.MaxDistance`'s cutoff. Only drawn when MaxDistance is
- * finite; there's no fixed endpoint to show otherwise. Called twice: once
- * for the current direction of travel (in the mode's color, from the
- * cursor), and once for the opposite direction (always grey, from the
- * origin) - drawing both is what fixes an old asymmetry where only
- * whichever side happened to have a line looked "on".
+ * The "how broad" indicator (pusher/puller only - the aligner has no
+ * "space" concept): two dashed runners, one at each of the tool-line's own
+ * two endpoints (`segStart` and `segEnd`), each spanning from `fromLocal`
+ * to `toLocal` along the drag axis - i.e. from the tool-line's current
+ * position out to the MaxDistance cutoff. For a horizontal drag that's two
+ * horizontal lines at the tool-line's top/bottom endpoints; for a vertical
+ * drag it's the mirror image: two vertical lines at the tool-line's
+ * left/right endpoints. Only drawn when MaxDistance is finite and the
+ * orientation is actually settled (see the MaxDistance preview logic in
+ * `redrawOverlays`).
  */
 function drawAffectedAreaIndicators(ctx, axisIsX, color, fromLocal, toLocal, segStart, segEnd) {
     const along0 = Math.min(fromLocal[axisIsX ? "x" : "y"], toLocal[axisIsX ? "x" : "y"]);
@@ -143,8 +142,8 @@ function drawAffectedAreaIndicators(ctx, axisIsX, color, fromLocal, toLocal, seg
         ctx.lineTo(along1, segEnd);
     } else {
         ctx.moveTo(segStart, along0);
-        ctx.lineTo(segEnd, along0);
-        ctx.moveTo(segStart, along1);
+        ctx.lineTo(segStart, along1);
+        ctx.moveTo(segEnd, along0);
         ctx.lineTo(segEnd, along1);
     }
     ctx.stroke();
