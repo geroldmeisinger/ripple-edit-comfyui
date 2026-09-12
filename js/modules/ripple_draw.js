@@ -152,18 +152,17 @@ function drawAffectedAreaIndicators(ctx, axisIsX, color, fromLocal, toLocal, seg
 }
 
 /**
- * The orthogonal cap at the MaxDistance cutoff itself: a dashed segment
- * perpendicular to the drag axis, positioned at `atLocal`'s along-axis
- * coordinate (i.e. exactly at the cutoff point) and spanning the same
- * `segStart..segEnd` range as the runner lines from
- * `drawAffectedAreaIndicators`, so the two together read as one open-ended
- * bracket: [ runner ][ runner ] with this cap closing the far end. Drawn
- * unconditionally, every frame, for both directions - there is no
- * direction-dependent branching here on purpose, since that's what
- * previously made the cap (and, before this fix, the whole indicator)
- * appear to only "pick one side" depending on which way the cursor moved.
+ * The "how far away" MaxDistance line: a dashed segment perpendicular to
+ * `axisIsX`'s axis (i.e. the same orientation as the tool-line itself),
+ * positioned at `atLocal`'s along-axis coordinate and spanning
+ * `segStart..segEnd`. Used two ways (see the MaxDistance preview logic in
+ * `redrawOverlays`): once per cardinal direction when orientation is still
+ * completely unknown (cursor at the exact origin), or once for the single
+ * live/settled direction otherwise. Color is the caller's job - gray while
+ * the orientation is only a candidate or the tool has fallen back into the
+ * safe zone, the active tool's own color once truly engaged.
  */
-function drawMaxDistanceCap(ctx, axisIsX, color, atLocal, segStart, segEnd) {
+function drawMaxDistanceLine(ctx, axisIsX, color, atLocal, segStart, segEnd) {
     const alongCoord = atLocal[axisIsX ? "x" : "y"];
     ctx.save();
     ctx.strokeStyle = color;
@@ -340,24 +339,56 @@ export function redrawOverlays() {
     const perpCenter = axisIsX ? cursorLocal.y : cursorLocal.x;
     const segInfo = computeSegmentBounds(rect, axisIsX, perpCenter);
 
-    // MaxDistance previews, in both directions - drawable even before ever
-    // engaging, as soon as a (possibly provisional) orientation is known.
-    // The current direction of travel uses the same color as the line
-    // (grey while disengaged, the mode's color once engaged); the opposite
-    // direction is always grey, since that side is never actually active.
+    // MaxDistance preview. Four states, matching how orientation itself is
+    // decided (see the module header and ripple_engine.js's tick()):
+    //
+    //  1. Cursor exactly at the origin - no direction vector exists yet, so
+    //     no single axis/side is preferred over any other. Preview all four
+    //     cardinal directions equally, each gray, each using the cross
+    //     length its *own* eventual axis would give the tool-line (not the
+    //     provisional tie-broken `axisIsX` from R.displayAxis, which is
+    //     meaningless at this exact point).
+    //  2. Cursor has moved but is still inside the safe zone (or has fallen
+    //     back into it after previously engaging, state 4 below reuses this
+    //     same branch) - a candidate direction exists (R.displayAxis/
+    //     R.displayDir, live every frame). Preview only that one direction,
+    //     gray - never a mirrored opposite side.
+    //  3. Cursor is outside the safe zone AND the orientation timer has
+    //     elapsed (`!disengaged`) - the direction is settled. The "how far
+    //     away" line switches to the active tool's own color (`drawColor`
+    //     already encodes this), and a second, always-gray "how broad" pair
+    //     of dashed runners appears, connecting the tool-line's own two
+    //     endpoints to the far line's two endpoints.
+    //  4. Falling back into the safe zone after engaging is just state 2
+    //     again - `drawColor` reverts to gray automatically since it's
+    //     already gated on `disengaged`, and R.displayAxis/R.displayDir
+    //     keep reporting the (frozen) axis and live sign, so the same
+    //     single-candidate branch below handles it with no extra code.
     if (mode !== RIPPLE_MODE.ALIGNER && settings.maxDistance > 0) {
-        const towardWorld = axisIsX
-            ? { x: R.startWorld.x + settings.maxDistance * (dir || 1), y: R.startWorld.y }
-            : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * (dir || 1) };
-        const awayWorld = axisIsX
-            ? { x: R.startWorld.x - settings.maxDistance * (dir || 1), y: R.startWorld.y }
-            : { x: R.startWorld.x, y: R.startWorld.y - settings.maxDistance * (dir || 1) };
-        const towardLocal = worldToCanvasLocal(towardWorld.x, towardWorld.y);
-        const awayLocal = worldToCanvasLocal(awayWorld.x, awayWorld.y);
-        drawAffectedAreaIndicators(overlayCtx, axisIsX, drawColor, cursorLocal, towardLocal, segInfo.segStart, segInfo.segEnd);
-        drawMaxDistanceCap(overlayCtx, axisIsX, drawColor, towardLocal, segInfo.segStart, segInfo.segEnd);
-        drawAffectedAreaIndicators(overlayCtx, axisIsX, COLORS.disengaged.line, originLocal, awayLocal, segInfo.segStart, segInfo.segEnd);
-        drawMaxDistanceCap(overlayCtx, axisIsX, COLORS.disengaged.line, awayLocal, segInfo.segStart, segInfo.segEnd);
+        if (R.displayAtExactOrigin) {
+            const segForX = computeSegmentBounds(rect, true, originLocal.y); // left/right candidates
+            const segForY = computeSegmentBounds(rect, false, originLocal.x); // up/down candidates
+            for (const sign of [1, -1]) {
+                const xWorld = { x: R.startWorld.x + settings.maxDistance * sign, y: R.startWorld.y };
+                const xLocal = worldToCanvasLocal(xWorld.x, xWorld.y);
+                drawMaxDistanceLine(overlayCtx, true, COLORS.disengaged.line, xLocal, segForX.segStart, segForX.segEnd);
+
+                const yWorld = { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * sign };
+                const yLocal = worldToCanvasLocal(yWorld.x, yWorld.y);
+                drawMaxDistanceLine(overlayCtx, false, COLORS.disengaged.line, yLocal, segForY.segStart, segForY.segEnd);
+            }
+        } else {
+            const previewDir = dir || 1;
+            const farWorld = axisIsX
+                ? { x: R.startWorld.x + settings.maxDistance * previewDir, y: R.startWorld.y }
+                : { x: R.startWorld.x, y: R.startWorld.y + settings.maxDistance * previewDir };
+            const farLocal = worldToCanvasLocal(farWorld.x, farWorld.y);
+            drawMaxDistanceLine(overlayCtx, axisIsX, drawColor, farLocal, segInfo.segStart, segInfo.segEnd);
+
+            if (!disengaged) {
+                drawAffectedAreaIndicators(overlayCtx, axisIsX, COLORS.helperLine, cursorLocal, farLocal, segInfo.segStart, segInfo.segEnd);
+            }
+        }
     }
 
     if (neverLeftSafeZoneYet) return;
