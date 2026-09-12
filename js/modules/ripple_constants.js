@@ -4,9 +4,7 @@
  * Naming (internal <-> what the person sees):
  *   PUSHER  = "ripple move, insert space"   (default, no modifier)
  *   PULLER  = "ripple move, remove space"   (Shift)
- *   ALIGNER = physical "broom" sweep, testing (Alt) - previously called
- *             "pusher" in earlier drafts of this tool; renamed to avoid
- *             clashing with the new PUSHER name above.
+ *   ALIGNER = physical "broom" sweep, testing (Alt)
  */
 
 export const EXT_NAME = "ripple.edit";
@@ -32,9 +30,9 @@ export const DEFAULTS = {
     safeZoneOrientationTimeoutMs: 150, // ms the cursor must be away from the exact origin before orientation locks in
     maxDistance: 0,         // graph-space units from the TRUE origin; 0 (or any non-positive value) = infinite
     lineWidth: 5,           // px
-    scrollStepPercent: 5,   // % per wheel notch, always relative to the current viewport dimension
+    scrollStepPercent: 20,   // % per wheel notch, always relative to the current viewport dimension
     nodeInclusionMode: "clear", // "clear" | "touching" | "center"
-    lockOrientationOutsideSafeZone: false,
+    lockOrientationOutsideSafeZone: true,
     hideVisuals: false,
 
     pusherLineColor: "rgba(60, 220, 130, 0.95)",
