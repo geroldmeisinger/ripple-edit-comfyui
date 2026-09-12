@@ -48,6 +48,7 @@ git clone https://github.com/geroldmeisinger/ripple-edit-comfyui
 
 # Changelog
 
+* 0.0.4 fixed ripple-edit within subgraphs, move subgraph widget, fixed distance indicators
 * 0.0.3 added safe-zone timeout, show node original position, show "+n nodes" for offscreen nodes, show MaxDistance indicators
 * 0.0.2 better mousewheel behaviour, magnetic aligner, works with Nodes 2.0, groups and reroute knots
 * 0.0.1 initial version
